@@ -1,0 +1,33 @@
+{
+  "name": "publish-oidc-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "config": {
+    "maronnOidcCli": "@maronn-oidc/cli@0.0.1",
+    "maronnOidcCore": "@maronn-oidc/core@0.0.1"
+  },
+  "scripts": {
+    "build": "npm run build:portal",
+    "build:portal": "node scripts/build-portal.mjs",
+    "setup": "node scripts/setup.mjs",
+    "deploy:portal": "node scripts/deploy-portal.mjs",
+    "test": "node --test test/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "audit:scripts": "bash -n guide.sh && for file in scripts/*.mjs; do node --check \"$file\" || exit 1; done",
+    "check": "npm run typecheck && npm run audit:scripts && npm test && npm run build"
+  },
+  "dependencies": {
+    "@maronn-oidc/core": "0.0.1",
+    "hono": "^4.9.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260722.1",
+    "@maronn-oidc/cli": "0.0.1",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.9.2"
+  }
+}

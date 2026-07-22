@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "WebWorker"],
+    "types": ["@cloudflare/workers-types"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "system/**/*.ts",
+    "templates/cloudflare/store.ts",
+    "templates/cloudflare/resolvers.ts",
+    "templates/cloudflare/persistence.ts"
+  ],
+  "exclude": ["apps", "dist", "node_modules"]
+}

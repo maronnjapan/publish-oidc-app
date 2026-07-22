@@ -1,0 +1,33 @@
+name: deploy-system
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "system/portal/**"
+      - "scripts/deploy-portal.mjs"
+      - "scripts/lib.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oidc-system
+  cancel-in-progress: false
+
+jobs:
+  portal:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      GITHUB_DISPATCH_TOKEN: ${{ secrets.PORTAL_GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run deploy:portal

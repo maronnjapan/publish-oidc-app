@@ -1,0 +1,5 @@
+{
+  "name": "@publish-oidc-app/portal",
+  "private": true,
+  "type": "module"
+}

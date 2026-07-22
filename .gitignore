@@ -1,0 +1,9 @@
+node_modules/
+dist/
+apps/
+.setup-guide-state
+.setup-guide-config
+*.log
+.env
+.dev.vars
+

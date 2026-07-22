@@ -1,0 +1,43 @@
+name: generate-op
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Portal request UUID
+        required: true
+        type: string
+      op_id:
+        description: Worker subdomain label / OP namespace
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oidc-op-${{ inputs.op_id }}
+  cancel-in-progress: false
+
+jobs:
+  generate-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      REQUEST_ID: ${{ inputs.request_id }}
+      OP_ID: ${{ inputs.op_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Mark request generating
+        run: node scripts/update-request.mjs "$REQUEST_ID" generating
+      - name: Generate with @maronn-oidc/cli and deploy through Cloudflare API
+        run: node scripts/deploy-op.mjs "$OP_ID"
+      - name: Mark request failed
+        if: failure()
+        run: node scripts/update-request.mjs "$REQUEST_ID" failed ci_failed
+
