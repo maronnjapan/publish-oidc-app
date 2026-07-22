@@ -61,9 +61,12 @@ class FlowDatabase {
 
 async function passwordRow(username, password) {
   const salt = webcrypto.getRandomValues(new Uint8Array(16));
-  const key = await webcrypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-  const hash = await webcrypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: 150000 }, key, 256);
-  return { username, password_hash: base64Url(new Uint8Array(hash)), password_salt: base64Url(salt), password_iterations: 150000, claims_json: JSON.stringify({ sub: username, name: "Alice Example", preferred_username: username, email: "alice@example.com", email_verified: true }) };
+  const passwordBytes = new TextEncoder().encode(password);
+  const saltedPassword = new Uint8Array(salt.length + passwordBytes.length);
+  saltedPassword.set(salt);
+  saltedPassword.set(passwordBytes, salt.length);
+  const hash = await webcrypto.subtle.digest("SHA-256", saltedPassword);
+  return { username, password_hash: base64Url(new Uint8Array(hash)), password_salt: base64Url(salt), password_iterations: 1, claims_json: JSON.stringify({ sub: username, name: "Alice Example", preferred_username: username, email: "alice@example.com", email_verified: true }) };
 }
 
 test("generated OP completes authorization-code login through shared D1", async () => {

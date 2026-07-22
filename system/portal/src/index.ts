@@ -35,7 +35,7 @@ type FeatureName = (typeof FEATURE_NAMES)[number];
 const OPTIONAL_SCOPES = ["profile", "email", "address", "phone", "offline_access"] as const;
 const NAME_PATTERN = /^[a-zA-Z0-9 _-]{0,40}$/;
 const USERNAME_PATTERN = /^[a-zA-Z0-9._@-]{1,64}$/;
-const PASSWORD_ITERATIONS = 150_000;
+const PASSWORD_HASH_ROUNDS = 1;
 
 const HTML = String.raw`<!doctype html>
 <html lang="ja">
@@ -140,7 +140,7 @@ const HTML = String.raw`<!doctype html>
       </div>
       <p class="hint" id="csv-feedback" aria-live="polite"></p>
       <div class="csv-preview" id="csv-preview" hidden></div>
-      <p class="hint">CSVは先頭行を <code>username,password</code> とし、合計5件まで指定できます。パスワードは共有D1へPBKDF2ハッシュとして保存します。</p>
+      <p class="hint">CSVは先頭行を <code>username,password</code> とし、合計5件まで指定できます。パスワードは共有D1へ個別salt付きSHA-256ハッシュとして保存します。</p>
     </section>
 
     <section class="card">
@@ -463,9 +463,12 @@ function allocateOpId(now = Date.now()): string {
 
 async function hashPassword(password: string): Promise<{ hash: string; salt: string; iterations: number }> {
   const saltBytes = crypto.getRandomValues(new Uint8Array(16));
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: saltBytes, iterations: PASSWORD_ITERATIONS }, key, 256);
-  return { hash: randomBytesToBase64Url(new Uint8Array(bits)), salt: randomBytesToBase64Url(saltBytes), iterations: PASSWORD_ITERATIONS };
+  const passwordBytes = new TextEncoder().encode(password);
+  const saltedPassword = new Uint8Array(saltBytes.length + passwordBytes.length);
+  saltedPassword.set(saltBytes);
+  saltedPassword.set(passwordBytes, saltBytes.length);
+  const digest = await crypto.subtle.digest("SHA-256", saltedPassword);
+  return { hash: randomBytesToBase64Url(new Uint8Array(digest)), salt: randomBytesToBase64Url(saltBytes), iterations: PASSWORD_HASH_ROUNDS };
 }
 
 function randomBytesToBase64Url(value: Uint8Array): string {

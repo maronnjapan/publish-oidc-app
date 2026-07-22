@@ -149,11 +149,14 @@ export function createD1Runtime(db: D1Database, opId: string, client: RuntimeCli
 
   const authenticateUser = async (username: string, password: string): Promise<UserClaims | null> => {
     const row = await db.prepare(`SELECT username, password_hash, password_salt, password_iterations, claims_json FROM oidc_users WHERE op_id = ?1 AND username = ?2`).bind(opId, username).first<UserRow>();
-    if (!row) return null;
-    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+    if (!row || row.password_iterations !== 1) return null;
     const salt = decodeBase64Url(row.password_salt);
-    const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: salt.buffer as ArrayBuffer, iterations: row.password_iterations }, key, 256);
-    if (!timingSafeEqual(new Uint8Array(bits), decodeBase64Url(row.password_hash))) return null;
+    const passwordBytes = new TextEncoder().encode(password);
+    const saltedPassword = new Uint8Array(salt.length + passwordBytes.length);
+    saltedPassword.set(salt);
+    saltedPassword.set(passwordBytes, salt.length);
+    const digest = await crypto.subtle.digest('SHA-256', saltedPassword);
+    if (!timingSafeEqual(new Uint8Array(digest), decodeBase64Url(row.password_hash))) return null;
     return safeParse<UserClaims>(row.claims_json);
   };
 

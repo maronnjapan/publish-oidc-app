@@ -7,7 +7,7 @@ Web UIから設定ごとに独立したOpenID ProviderをCloudflare Workersへ�
 - Worker 1個につきOP 1個を発行し、Workerのサブドメインラベル（例: `maronn-op-abc...`）をOP IDと共有D1の名前空間キーに使用
 - 作成画面でリダイレクトURL、`openid`に加えるスコープ、`public`/`confidential`、PKCE・Refresh Token・Introspection・Revocation・Request Objectを選択
 - 1〜5ユーザーを画面または`username,password`形式のCSVで登録
-- パスワードはPBKDF2-SHA-256（個別salt）で共有D1へ保存
+- パスワードはSHA-256（個別salt）で共有D1へ保存
 - publicではOP URLとClient ID、confidentialでは加えてClient Secretをデプロイ完了後に一度だけ表示
 - 認可コード、アクセストークン、リフレッシュトークン、認証トランザクション、ブラウザセッション、同意状態を1個の共有D1へ永続化（インメモリフォールバックなし）
 - デプロイから24時間後にOP Workerと、その`op_id`に紐づく共有D1データを自動削除
@@ -100,7 +100,7 @@ npm run build
 npm run check
 ```
 
-テストはポータル入力・CSV/UI、IP制限、資格情報の条件分岐、PBKDF2、D1名前空間、CLI機能トグル、生成OPのWorkers bundleを検証します。
+テストはポータル入力・CSV/UI、IP制限、資格情報の条件分岐、salt付きSHA-256、D1名前空間、CLI機能トグル、生成OPのWorkers bundleを検証します。
 
 ## セキュリティと運用
 

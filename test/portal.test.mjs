@@ -127,12 +127,14 @@ test("per-IP rate limiting rejects the eleventh request", async () => {
   assert.equal(await applyRateLimit(env(DB), "203.0.113.7", "2026-07-23"), false);
 });
 
-test("password hashing uses a random salt and does not retain plaintext", async () => {
+test("password hashing uses salted SHA-256 and does not retain plaintext", async () => {
   const first = await hashPassword("password-123");
   const second = await hashPassword("password-123");
   assert.notEqual(first.salt, second.salt);
   assert.notEqual(first.hash, "password-123");
-  assert.equal(first.iterations, 150000);
+  const expected = await crypto.subtle.digest("SHA-256", Buffer.concat([Buffer.from(first.salt, "base64url"), Buffer.from("password-123")]));
+  assert.equal(first.hash, Buffer.from(expected).toString("base64url"));
+  assert.equal(first.iterations, 1);
 });
 
 test("public creation returns no secret and writes a hashed D1 user", async () => {
