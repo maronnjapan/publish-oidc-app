@@ -244,7 +244,7 @@ show_status() {
   local number label
   for number in 0 1 2 3 4 5 6; do
     case "$number" in
-      0) label="前提条件";; 1) label="対象選択";; 2) label="Secrets";; 3) label="ローカル検証";; 4) label="共有D1";; 5) label="ポータル";; 6) label="疎通確認";;
+      0) label="前提条件";; 1) label="対象選択";; 2) label="Secrets";; 3) label="ローカル検証";; 4) label="共有D1";; 5) label="Reaper / ポータル";; 6) label="疎通確認";;
     esac
     local state_key="step$number"
     [ "$number" -eq 5 ] && state_key="step5_reaper"
