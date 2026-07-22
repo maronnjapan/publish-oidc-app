@@ -15,6 +15,7 @@
     "build:portal": "node scripts/build-portal.mjs",
     "setup": "node scripts/setup.mjs",
     "deploy:portal": "node scripts/deploy-portal.mjs",
+    "deploy:reaper": "node scripts/deploy-reaper.mjs",
     "test": "node --test test/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "audit:scripts": "bash -n guide.sh && for file in scripts/*.mjs; do node --check \"$file\" || exit 1; done",

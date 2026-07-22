@@ -1,0 +1,5 @@
+{
+  "name": "@publish-oidc-app/reaper",
+  "private": true,
+  "type": "module"
+}

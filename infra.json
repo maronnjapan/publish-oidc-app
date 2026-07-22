@@ -1,8 +1,8 @@
 {
-  "account_id": "",
-  "workers_dev_subdomain": "",
-  "d1_database_id": "",
+  "account_id": "164c0fe07b9fda33c5f3d331e74b510b",
+  "workers_dev_subdomain": "maronn",
+  "d1_database_id": "422287f5-2818-4677-ac90-ddfddcee1f2b",
   "compatibility_date": "2026-07-01",
-  "github_owner": "",
-  "github_repo": ""
+  "github_owner": "maronnjapan",
+  "github_repo": "publish-oidc-app"
 }

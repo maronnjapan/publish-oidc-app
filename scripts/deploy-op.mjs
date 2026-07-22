@@ -72,7 +72,8 @@ export async function deployOp(opId) {
   await setSubdomain(infra, token, opId);
 
   const now = new Date().toISOString();
-  await d1Query(infra, token, `INSERT INTO registry_ops (op_id, script_name, name, url, client_id, client_type, redirect_uri, scopes_json, features_json, created_at, status) VALUES (?1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'active') ON CONFLICT(op_id) DO UPDATE SET url = excluded.url, status = 'active'`, [opId, config.name || opId, issuer, config.client_id, config.client_type, config.redirect_url, JSON.stringify(config.scopes), JSON.stringify(config.features), now]);
+  const expiresAt = new Date(Date.parse(now) + 24 * 60 * 60 * 1000).toISOString();
+  await d1Query(infra, token, `INSERT INTO registry_ops (op_id, script_name, name, url, client_id, client_type, redirect_uri, scopes_json, features_json, created_at, expires_at, status) VALUES (?1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active') ON CONFLICT(op_id) DO UPDATE SET url = excluded.url, created_at = excluded.created_at, expires_at = excluded.expires_at, status = 'active'`, [opId, config.name || opId, issuer, config.client_id, config.client_type, config.redirect_url, JSON.stringify(config.scopes), JSON.stringify(config.features), now, expiresAt]);
   const sanitizedConfig = { ...config };
   delete sanitizedConfig.client_secret;
   await d1Query(infra, token, `UPDATE registry_requests SET status = 'deployed', url = ?2, error = NULL, config_json = ?3, updated_at = ?4 WHERE request_id = ?1`, [row.request_id, issuer, JSON.stringify(sanitizedConfig), now]);

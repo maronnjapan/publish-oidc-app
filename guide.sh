@@ -130,6 +130,9 @@ Cloudflare API Tokenを Custom Token として作成します。
   - Workers Scripts: Edit
   - D1: Edit
 
+このTokenは24時間後の自動削除を行うReaper WorkerにもSecretとして設定され、
+対象OP WorkerをCloudflare APIで削除するために使われます。
+
 次にGitHub Fine-grained PATを対象リポジトリだけに限定して作成します。
 Repository permissionsは Actions: Read and write が必要です。
 
@@ -164,6 +167,7 @@ step4() {
   cat <<'EOF'
 Cloudflare APIで maronn-oidc-shared-d1 を作成または再利用し、次を作ります。
   - ポータルのリクエスト・IP/全体レート制限台帳
+  - OPの作成時刻・24時間の有効期限を持つ削除対象台帳
   - 最大5ユーザーのPBKDF2パスワードハッシュ
   - 全OPの認可コード、トークン、セッション、同意状態
 
@@ -178,23 +182,35 @@ EOF
 }
 
 step5() {
-  step "Step 5: infra.jsonの反映とポータルのデプロイ"
+  step "Step 5: infra.jsonの反映とシステムWorkerのデプロイ"
   cat <<'EOF'
 GitHub Actionsで生成OPをデプロイするため、生成済みinfra.jsonとこのコード一式が
 mainブランチへpushされている必要があります。未反映なら別ターミナルで確認後、
   git add . && git commit -m "feat: add OIDC provider publisher" && git push origin main
 を実行してください。コミット対象に秘密ファイルがないことを必ず確認してください。
 
-続いて maronn-oidc-portal WorkerをCloudflare REST APIでデプロイします。
-既定の制限は1 IPあたり1日10回、全体で1日50回（UTCリセット）です。
+続いて次の2つのシステムWorkerをCloudflare REST APIでデプロイします。
+
+  maronn-oidc-reaper
+    - 15分ごとのcronで、デプロイから24時間を過ぎたOP Workerを削除
+    - 共有D1のユーザー、トークン、セッション、同意、発行台帳もop_id単位で削除
+    - 既存registry_opsへexpires_atを追加・補完する移行も自動適用
+
+  maronn-oidc-portal
+    - OP発行UIを公開
+    - 既定の制限は1 IPあたり1日10回、全体で1日50回（UTCリセット）
+
+Reaperはmaronn-op-から始まる厳密なOP IDだけを削除し、ポータルやReaper自身を
+削除対象にしません。Cloudflare API TokenはReaperのWorker Secretへ登録されます。
 EOF
   load_target || return 1
   prompt_secret CLOUDFLARE_API_TOKEN "Cloudflare API Token" || return 1
   prompt_secret PORTAL_GITHUB_TOKEN "GitHub Fine-grained PAT" || return 1
   confirm "コードとinfra.jsonがGitHubのmainにpush済みですか？" || return 1
   export GITHUB_DISPATCH_TOKEN="$PORTAL_GITHUB_TOKEN"
+  run_confirmed "24時間自動削除Reaperのデプロイ" npm run deploy:reaper || return 1
   run_confirmed "ポータルWorkerのデプロイ" npm run deploy:portal || return 1
-  mark_done step5
+  mark_done step5_reaper
 }
 
 step6() {
@@ -214,6 +230,8 @@ step6() {
 
 完了後、publicならOP URLとClient ID、confidentialなら加えてClient Secretが
 一度だけ表示されます。OP URLの /.well-known/openid-configuration も確認します。
+発行したOP Workerとその共有D1データは、デプロイから約24時間後（cron間隔を含め
+最大約24時間15分後）に自動削除されます。機微な本番データは登録しないでください。
 EOF
   if command -v curl >/dev/null 2>&1; then curl --fail --silent --show-error "$portal_url/api/quota" >/dev/null && ok "ポータルAPIが応答しました。" || warn "まだ応答しません。デプロイログを確認してください。"; fi
   confirm "画面からOPを作成し、発行情報とDiscoveryを確認できましたか？" || return 1
@@ -228,15 +246,19 @@ show_status() {
     case "$number" in
       0) label="前提条件";; 1) label="対象選択";; 2) label="Secrets";; 3) label="ローカル検証";; 4) label="共有D1";; 5) label="ポータル";; 6) label="疎通確認";;
     esac
-    if is_done "step$number"; then printf "  ${C_GREEN}[完了]${C_RESET} Step %s: %s\n" "$number" "$label"; else printf "  ${C_DIM}[未完]${C_RESET} Step %s: %s\n" "$number" "$label"; fi
+    local state_key="step$number"
+    [ "$number" -eq 5 ] && state_key="step5_reaper"
+    if is_done "$state_key"; then printf "  ${C_GREEN}[完了]${C_RESET} Step %s: %s\n" "$number" "$label"; else printf "  ${C_DIM}[未完]${C_RESET} Step %s: %s\n" "$number" "$label"; fi
   done
   printf '\n  Cloudflare Account: %s\n  GitHub repository:  %s\n' "$(load_config CLOUDFLARE_ACCOUNT_ID)" "$(load_config GITHUB_REPOSITORY)"
 }
 
 run_all() {
-  local number
+  local number state_key
   for number in 0 1 2 3 4 5 6; do
-    if is_done "step$number"; then info "Step $number は完了済みです。"; continue; fi
+    state_key="step$number"
+    [ "$number" -eq 5 ] && state_key="step5_reaper"
+    if is_done "$state_key"; then info "Step $number は完了済みです。"; continue; fi
     "step$number" || { warn "Step $number で停止しました。修正後に ./guide.sh を再実行してください。"; return 1; }
   done
   show_status

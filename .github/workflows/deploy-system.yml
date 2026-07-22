@@ -5,8 +5,10 @@ on:
   push:
     branches: [main]
     paths:
-      - "system/portal/**"
+      - "system/**"
       - "scripts/deploy-portal.mjs"
+      - "scripts/deploy-reaper.mjs"
+      - "scripts/setup.mjs"
       - "scripts/lib.mjs"
 
 permissions:
@@ -30,4 +32,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - run: npm run deploy:reaper
       - run: npm run deploy:portal

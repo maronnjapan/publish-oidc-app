@@ -10,6 +10,7 @@ Web UIから設定ごとに独立したOpenID ProviderをCloudflare Workersへ�
 - パスワードはPBKDF2-SHA-256（個別salt）で共有D1へ保存
 - publicではOP URLとClient ID、confidentialでは加えてClient Secretをデプロイ完了後に一度だけ表示
 - 認可コード、アクセストークン、リフレッシュトークン、認証トランザクション、ブラウザセッション、同意状態を1個の共有D1へ永続化（インメモリフォールバックなし）
+- デプロイから24時間後にOP Workerと、その`op_id`に紐づく共有D1データを自動削除
 - 参照実装と同じOrigin検証、IPv4単位/IPv6 `/64`単位の日次IP制限、全体日次制限
 - wranglerを使わずCloudflare REST APIでWorkerとD1を操作
 
@@ -24,6 +25,7 @@ Browser -> Portal Worker -> GitHub workflow_dispatch
 
 Portal Worker -----------+
 Generated OP Workers ----+--> shared D1 (all rows keyed by op_id)
+Reaper Worker -----------+     15分ごとに期限切れOPを削除
 ```
 
 `POST /api/apps`はサーバー側でOP ID、Client ID、必要ならClient Secretを採番します。デプロイ設定は共有D1へ一時保存され、GitHub ActionsがWorker SecretへClient設定を登録した後、D1からClient Secretを除去します。ブラウザは作成レスポンスの資格情報をメモリだけに保持し、デプロイ完了時に表示します。
@@ -51,6 +53,9 @@ npm run setup
 
 # infra.jsonとコードをmainへpushした後
 CLOUDFLARE_API_TOKEN=... \
+  npm run deploy:reaper
+
+CLOUDFLARE_API_TOKEN=... \
 GITHUB_DISPATCH_TOKEN=... \
 npm run deploy:portal
 ```
@@ -63,6 +68,7 @@ GitHub Repository Secrets:
 | `PORTAL_GITHUB_TOKEN` | ポータルから`generate-op.yml`を起動 |
 
 ポータルの既定URLは`https://maronn-oidc-portal.<workers.dev subdomain>.workers.dev`です。
+`maronn-oidc-reaper`は15分ごとのCron Triggerで動作します。通常のOPはデプロイ時刻から24時間、デプロイ途中で失敗して残ったWorkerやD1データはUIリクエスト作成時刻から24時間を過ぎると回収されます。
 
 ## CSV
 
@@ -102,4 +108,5 @@ npm run check
 - 既定上限は1 IPあたり10回/UTC日、全体50回/UTC日です。`RATE_LIMIT_PER_IP_PER_DAY`と`RATE_LIMIT_GLOBAL_PER_DAY`をポータル再デプロイ時に変更できます。
 - OPのRSA署名秘密鍵とClient設定は各Worker Secretに保存します。共有D1に残るClient設定からはデプロイ成功後にSecretを削除します。
 - 生成OPの状態はトークン文字列等をSHA-256で不可逆化したレコードキーとして共有D1へ保存します。
-- 本構成は自動削除を行いません。不要なOPの削除機能を追加する場合は、`maronn-op-`プレフィックスと該当`op_id`のD1行を厳密に確認してから実装してください。
+- Reaperの削除対象は、台帳に記録された厳密な`maronn-op-<10〜16文字の英小文字・数字>`だけです。`maronn-oidc-portal`や`maronn-oidc-reaper`などのシステムWorkerは対象外です。
+- ReaperはWorkerを先に削除し、その後D1の`oidc_users`、`oidc_records`、同意情報、リクエスト・OP台帳を削除します。途中失敗時は次のcronで再試行します。

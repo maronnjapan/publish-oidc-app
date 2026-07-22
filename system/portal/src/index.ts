@@ -37,7 +37,7 @@ const NAME_PATTERN = /^[a-zA-Z0-9 _-]{0,40}$/;
 const USERNAME_PATTERN = /^[a-zA-Z0-9._@-]{1,64}$/;
 const PASSWORD_ITERATIONS = 150_000;
 
-const HTML = `<!doctype html>
+const HTML = String.raw`<!doctype html>
 <html lang="ja">
 <head>
   <meta charset="utf-8">
@@ -62,6 +62,9 @@ const HTML = `<!doctype html>
     .choices { display: flex; flex-wrap: wrap; gap: .65rem 1.1rem; margin-top: .7rem; }
     .choices label { font-weight: 500; }
     .hint { margin: .35rem 0 0; color: #52627a; font-size: .9rem; }
+    .section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+    .section-heading h2 { margin-bottom: 0; }
+    .count { color: #52627a; font-size: .9rem; font-weight: 700; }
     .user { display: grid; grid-template-columns: 1fr 1fr auto; gap: .65rem; margin-top: .65rem; align-items: end; }
     button { min-height: 2.7rem; padding: .55rem .9rem; border: 0; border-radius: .5rem; cursor: pointer; font-weight: 750; }
     button.primary { width: 100%; margin-top: .5rem; background: #165dcc; color: #fff; }
@@ -70,6 +73,14 @@ const HTML = `<!doctype html>
     button:disabled { opacity: .55; cursor: not-allowed; }
     #quota { color: #52627a; }
     #status { min-height: 1.5rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #csv-feedback.error { color: #a22020; font-weight: 700; }
+    .csv-preview { margin-top: .85rem; padding: .85rem; border: 1px solid #cbd5e1; border-radius: .55rem; background: #f8fafc; overflow-x: auto; }
+    .csv-preview[hidden] { display: none; }
+    .csv-preview p { margin: 0 0 .55rem; }
+    .csv-preview table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    .csv-preview th, .csv-preview td { padding: .45rem .55rem; border-top: 1px solid #dce3ed; text-align: left; vertical-align: top; }
+    .csv-preview .valid { color: #17613a; font-weight: 700; }
+    .csv-preview .invalid { color: #a22020; font-weight: 700; }
     .result { padding: 1rem; background: #eef8f2; border: 1px solid #b9dec6; border-radius: .55rem; }
     .credential { display: grid; grid-template-columns: 9rem 1fr; gap: .5rem; margin: .5rem 0; }
     code { word-break: break-all; user-select: all; }
@@ -121,12 +132,14 @@ const HTML = `<!doctype html>
     </section>
 
     <section class="card">
-      <h2>ログインユーザー（1〜5件）</h2>
+      <div class="section-heading"><h2>登録予定のログインユーザー</h2><span class="count" id="user-count">0 / 5件</span></div>
       <div id="users"></div>
       <div class="choices">
         <button class="secondary" id="add-user" type="button">ユーザーを追加</button>
         <label class="secondary" style="padding:.65rem .9rem;border-radius:.5rem;cursor:pointer">CSVから読み込む<input class="sr" id="csv" type="file" accept=".csv,text/csv"></label>
       </div>
+      <p class="hint" id="csv-feedback" aria-live="polite"></p>
+      <div class="csv-preview" id="csv-preview" hidden></div>
       <p class="hint">CSVは先頭行を <code>username,password</code> とし、合計5件まで指定できます。パスワードは共有D1へPBKDF2ハッシュとして保存します。</p>
     </section>
 
@@ -143,22 +156,36 @@ const users = document.querySelector('#users');
 const submit = document.querySelector('#submit');
 const quota = document.querySelector('#quota');
 const statusBox = document.querySelector('#status');
+const addUserButton = document.querySelector('#add-user');
+const csvInput = document.querySelector('#csv');
+const csvFeedback = document.querySelector('#csv-feedback');
+const csvPreview = document.querySelector('#csv-preview');
+const userCount = document.querySelector('#user-count');
 let exhausted = false;
 let operationBusy = false;
+let nextUserId = 1;
+
+function updateUserControls() {
+  const count = users.children.length;
+  userCount.textContent = count + ' / 5件';
+  addUserButton.disabled = count >= 5;
+}
 
 function addUser(username = '', password = '') {
-  if (users.children.length >= 5) return;
+  if (users.children.length >= 5) return false;
   const row = document.createElement('div'); row.className = 'user';
+  const index = nextUserId++;
   const u = document.createElement('div');
-  const ul = document.createElement('label'); ul.className = 'block'; ul.textContent = 'ユーザー名';
-  const ui = document.createElement('input'); ui.type = 'text'; ui.className = 'username'; ui.required = true; ui.maxLength = 64; ui.pattern = '[a-zA-Z0-9._@-]+'; ui.autocomplete = 'username'; ui.value = username;
+  const ul = document.createElement('label'); ul.className = 'block'; ul.textContent = 'ユーザー名'; ul.htmlFor = 'username-' + index;
+  const ui = document.createElement('input'); ui.id = 'username-' + index; ui.type = 'text'; ui.className = 'username'; ui.required = true; ui.maxLength = 64; ui.pattern = '[a-zA-Z0-9._@-]+'; ui.autocomplete = 'username'; ui.value = username;
+  ui.addEventListener('input', () => ui.setCustomValidity(''));
   u.append(ul, ui);
   const p = document.createElement('div');
-  const pl = document.createElement('label'); pl.className = 'block'; pl.textContent = 'パスワード';
-  const pi = document.createElement('input'); pi.type = 'password'; pi.className = 'password'; pi.required = true; pi.minLength = 8; pi.maxLength = 128; pi.autocomplete = 'new-password'; pi.value = password;
+  const pl = document.createElement('label'); pl.className = 'block'; pl.textContent = 'パスワード'; pl.htmlFor = 'password-' + index;
+  const pi = document.createElement('input'); pi.id = 'password-' + index; pi.type = 'password'; pi.className = 'password'; pi.required = true; pi.minLength = 8; pi.maxLength = 128; pi.autocomplete = 'new-password'; pi.value = password;
   p.append(pl, pi);
-  const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'danger'; remove.textContent = '削除'; remove.addEventListener('click', () => { if (users.children.length > 1) row.remove(); });
-  row.append(u, p, remove); users.append(row);
+  const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'danger'; remove.textContent = '削除'; remove.addEventListener('click', () => { if (users.children.length > 1) { row.remove(); updateUserControls(); } });
+  row.append(u, p, remove); users.append(row); updateUserControls(); return true;
 }
 
 function parseCsv(text) {
@@ -168,20 +195,78 @@ function parseCsv(text) {
     if (quoted && char === '"' && text[i + 1] === '"') { cell += '"'; i++; }
     else if (char === '"') quoted = !quoted;
     else if (char === ',' && !quoted) { row.push(cell); cell = ''; }
-    else if ((char === '\n' || char === '\r') && !quoted) { if (char === '\r' && text[i + 1] === '\n') i++; row.push(cell); if (row.some(Boolean)) rows.push(row); row = []; cell = ''; }
+    else if ((char === '\n' || char === '\r') && !quoted) { if (char === '\r' && text[i + 1] === '\n') i++; row.push(cell); if (row.length > 1 || cell.length > 0) rows.push(row); row = []; cell = ''; }
     else cell += char;
   }
-  row.push(cell); if (row.some(Boolean)) rows.push(row);
+  if (quoted) throw new Error('引用符が閉じられていません');
+  row.push(cell); if (row.length > 1 || cell.length > 0) rows.push(row);
   return rows;
 }
 
-document.querySelector('#add-user').addEventListener('click', () => addUser());
-document.querySelector('#csv').addEventListener('change', async (event) => {
+function validateCsvRows(rows) {
+  const seen = new Set();
+  return rows.map((row) => {
+    const errors = [];
+    const username = (row[0] || '').trim();
+    const password = row[1] || '';
+    if (row.length !== 2) errors.push('列数は2列にしてください');
+    if (!/^[a-zA-Z0-9._@-]{1,64}$/.test(username)) errors.push('ユーザー名の形式が不正です');
+    if (seen.has(username)) errors.push('ユーザー名が重複しています');
+    if (username) seen.add(username);
+    if (password.length < 8 || password.length > 128) errors.push('パスワードは8〜128文字にしてください');
+    return { username, password, errors };
+  });
+}
+
+function renderCsvPreview(fileName, entries, countError = '') {
+  csvPreview.replaceChildren(); csvPreview.hidden = false;
+  const title = document.createElement('p'); const strong = document.createElement('strong');
+  strong.textContent = 'CSVプレビュー: ' + fileName; title.append(strong, document.createTextNode('（' + entries.length + '件）')); csvPreview.append(title);
+  if (countError) { const error = document.createElement('p'); error.className = 'invalid'; error.textContent = countError; csvPreview.append(error); }
+  const table = document.createElement('table');
+  const head = document.createElement('thead'); const headRow = document.createElement('tr');
+  for (const label of ['行', 'ユーザー名', 'パスワード', '判定']) { const th = document.createElement('th'); th.textContent = label; headRow.append(th); }
+  head.append(headRow); table.append(head);
+  const body = document.createElement('tbody');
+  entries.forEach((entry, index) => {
+    const tr = document.createElement('tr');
+    const values = [String(index + 1), entry.username || '（未入力）', entry.password ? '入力あり（' + entry.password.length + '文字）' : '（未入力）'];
+    for (const value of values) { const td = document.createElement('td'); td.textContent = value; tr.append(td); }
+    const result = document.createElement('td'); const errors = countError ? [countError, ...entry.errors] : entry.errors;
+    result.textContent = errors.length ? errors.join(' / ') : 'OK'; result.className = errors.length ? 'invalid' : 'valid'; tr.append(result); body.append(tr);
+  });
+  table.append(body); csvPreview.append(table);
+}
+
+function validateUniqueUsers() {
+  const seen = new Set(); let valid = true;
+  for (const input of users.querySelectorAll('.username')) {
+    input.setCustomValidity('');
+    if (seen.has(input.value)) { input.setCustomValidity('同じユーザー名は複数登録できません'); valid = false; }
+    seen.add(input.value);
+  }
+  return valid;
+}
+
+addUserButton.addEventListener('click', () => {
+  if (addUser()) { csvFeedback.className = 'hint'; csvFeedback.textContent = '空のユーザー入力欄を追加しました。現在' + users.children.length + '件です。'; }
+});
+csvInput.addEventListener('change', async (event) => {
   const file = event.target.files[0]; if (!file) return;
-  const rows = parseCsv((await file.text()).replace(/^\\uFEFF/, ''));
-  if (rows[0] && rows[0][0].trim().toLowerCase() === 'username' && rows[0][1]?.trim().toLowerCase() === 'password') rows.shift();
-  if (rows.length < 1 || rows.length > 5 || rows.some((r) => r.length < 2)) { window.alert('CSVはusername,passwordの1〜5件にしてください'); return; }
-  users.replaceChildren(); rows.forEach((r) => addUser(r[0].trim(), r[1])); form.reportValidity();
+  csvFeedback.className = 'hint'; csvFeedback.textContent = 'CSVを確認しています…';
+  try {
+    const rows = parseCsv((await file.text()).replace(/^\uFEFF/, ''));
+    if (rows[0] && rows[0][0].trim().toLowerCase() === 'username' && rows[0][1]?.trim().toLowerCase() === 'password') rows.shift();
+    const entries = validateCsvRows(rows); const countError = entries.length < 1 || entries.length > 5 ? 'ユーザーは1〜5件にしてください' : '';
+    renderCsvPreview(file.name, entries, countError);
+    if (countError || entries.some((entry) => entry.errors.length)) {
+      csvFeedback.className = 'hint error'; csvFeedback.textContent = 'CSVに修正が必要な項目があります。プレビューの判定欄を確認してください。'; return;
+    }
+    users.replaceChildren(); entries.forEach((entry) => addUser(entry.username, entry.password)); updateUserControls();
+    csvFeedback.textContent = entries.length + '件を登録予定のユーザー欄へ反映しました。内容を確認してからOPを作成してください。'; form.reportValidity();
+  } catch (error) {
+    csvPreview.hidden = true; csvPreview.replaceChildren(); csvFeedback.className = 'hint error'; csvFeedback.textContent = 'CSVを読み込めませんでした（' + error.message + '）';
+  } finally { event.target.value = ''; }
 });
 
 function setBusy(value) { operationBusy = value; submit.disabled = operationBusy || exhausted; }
@@ -217,7 +302,7 @@ async function poll(requestId, credentials, startedAt) {
 }
 
 form.addEventListener('submit', async (event) => {
-  event.preventDefault(); if (!form.reportValidity()) return; setBusy(true); textStatus('作成リクエストを送信しています…');
+  event.preventDefault(); validateUniqueUsers(); if (!form.reportValidity()) return; setBusy(true); textStatus('作成リクエストを送信しています…');
   const body = {
     name: document.querySelector('#name').value,
     redirect_url: document.querySelector('#redirect-url').value,

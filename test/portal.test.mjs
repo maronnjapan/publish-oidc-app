@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+import vm from "node:vm";
 import { build } from "esbuild";
 
 const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "oidc-portal-test-"));
@@ -73,7 +74,30 @@ function env(DB) {
 }
 
 test("the UI contains redirect URL, scopes, client type, feature, account, and CSV controls", () => {
-  for (const marker of ["redirect-url", "client-type", "offline_access", "refresh-token", "add-user", "type=\"file\"", "username,password"]) assert.match(HTML, new RegExp(marker));
+  for (const marker of ["redirect-url", "client-type", "offline_access", "refresh-token", "add-user", "type=\"file\"", "username,password", "CSVプレビュー", "user-count"]) assert.match(HTML, new RegExp(marker));
+});
+
+test("the inline portal script is valid JavaScript", () => {
+  const script = HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.ok(script);
+  assert.doesNotThrow(() => new vm.Script(script));
+});
+
+test("CSV parsing supports quoted fields and validates preview rows", () => {
+  const script = HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  const functions = script.slice(script.indexOf("function parseCsv"), script.indexOf("function renderCsvPreview"));
+  const context = {};
+  vm.runInNewContext(`${functions}; this.parseCsv = parseCsv; this.validateCsvRows = validateCsvRows;`, context);
+  const rows = context.parseCsv('alice,"long,password"\r\nbob,password-123\n');
+  assert.deepEqual(Array.from(rows, (row) => Array.from(row)), [["alice", "long,password"], ["bob", "password-123"]]);
+  assert.deepEqual(Array.from(context.validateCsvRows(rows), ({ username, errors }) => ({ username, errors: Array.from(errors) })), [
+    { username: "alice", errors: [] },
+    { username: "bob", errors: [] },
+  ]);
+  const invalid = context.validateCsvRows(context.parseCsv('same,short\nsame,password-123'));
+  assert.match(invalid[0].errors.join(" "), /8〜128/);
+  assert.match(invalid[1].errors.join(" "), /重複/);
+  assert.throws(() => context.parseCsv('alice,"unterminated'), /引用符/);
 });
 
 test("redirect URLs allow HTTPS and localhost HTTP but reject fragments and remote HTTP", () => {

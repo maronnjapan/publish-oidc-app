@@ -7,6 +7,7 @@ test("one shared D1 schema namespaces all OIDC state by op_id", () => {
   const schema = SCHEMA_STATEMENTS.join("\n");
   for (const table of ["registry_ops", "oidc_users", "oidc_records", "oidc_consents", "oidc_consent_grants"]) assert.match(schema, new RegExp(table));
   assert.match(schema, /PRIMARY KEY \(op_id, kind, record_key\)/);
+  assert.match(schema, /registry_ops .*expires_at TEXT/);
 });
 
 test("deployment binds the same D1 and uses op_id as script/subdomain name", async () => {
@@ -16,6 +17,8 @@ test("deployment binds the same D1 and uses op_id as script/subdomain name", asy
   assert.match(source, /OP_ID/);
   assert.match(source, /setWorkerSecret/);
   assert.match(source, /delete sanitizedConfig\.client_secret/);
+  assert.match(source, /24 \* 60 \* 60 \* 1000/);
+  assert.match(source, /expires_at/);
 });
 
 test("portal preserves reference IP/global limits and Origin verification", async () => {
@@ -33,11 +36,21 @@ test("GitHub workflow generates and deploys each OP independently", async () => 
   assert.match(workflow, /oidc-op-\$\{\{ inputs\.op_id \}\}/);
 });
 
+test("system deployment installs the 24-hour reaper and its 15-minute cron", async () => {
+  const workflow = await readFile(".github/workflows/deploy-system.yml", "utf8");
+  const deploy = await readFile("scripts/deploy-reaper.mjs", "utf8");
+  assert.match(workflow, /npm run deploy:reaper/);
+  assert.match(deploy, /"maronn-oidc-reaper"/);
+  assert.match(deploy, /\*\/15 \* \* \* \*/);
+  assert.match(deploy, /ensureRegistryOpsExpiry/);
+});
+
 test("guide covers secrets, shared D1, deployment, and smoke testing", async () => {
   const guide = await readFile("guide.sh", "utf8");
   assert.match(guide, /PORTAL_GITHUB_TOKEN/);
   assert.match(guide, /scripts\/setup\.mjs/);
   assert.match(guide, /npm run deploy:portal/);
+  assert.match(guide, /npm run deploy:reaper/);
   assert.match(guide, /共有D1/);
   assert.match(guide, /Discovery/);
 });
