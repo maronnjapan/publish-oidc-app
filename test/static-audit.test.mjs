@@ -8,6 +8,7 @@ test("one shared D1 schema namespaces all OIDC state by op_id", () => {
   for (const table of ["registry_ops", "oidc_users", "oidc_records", "oidc_consents", "oidc_consent_grants"]) assert.match(schema, new RegExp(table));
   assert.match(schema, /PRIMARY KEY \(op_id, kind, record_key\)/);
   assert.match(schema, /registry_ops .*expires_at TEXT/);
+  assert.match(schema, /registry_requests .*clone_token_hash TEXT/);
 });
 
 test("deployment binds the same D1 and uses op_id as script/subdomain name", async () => {
@@ -27,6 +28,21 @@ test("portal preserves reference IP/global limits and Origin verification", asyn
   assert.match(portal, /RATE_LIMIT_GLOBAL_PER_DAY/);
   assert.match(portal, /CF-Connecting-IP/);
   assert.match(portal, /origin !== `https:\/\/\$\{host\}`/);
+});
+
+test("clone endpoint rebuilds repositories per request instead of storing code", async () => {
+  const gitHttp = await readFile("system/portal/src/git-http.ts", "utf8");
+  const repository = await readFile("system/portal/src/op-repo.ts", "utf8");
+  assert.match(gitHttp, /buildOpRepository/);
+  assert.match(gitHttp, /o\.status = 'active' AND \(o\.expires_at IS NULL OR o\.expires_at > \?2\)/);
+  assert.match(gitHttp, /tokenMatches\(request, found\.cloneTokenHash\)/);
+  assert.match(gitHttp, /www-authenticate/);
+  assert.doesNotMatch(gitHttp, /INSERT INTO registry_ops|R2Bucket|KVNamespace|config_json/);
+  assert.doesNotMatch(repository, /R2Bucket|KVNamespace/);
+  assert.match(repository, /REPLACE_WITH_YOUR_CLIENT_SECRET/);
+  const deploy = await readFile("scripts/deploy-portal.mjs", "utf8");
+  assert.match(deploy, /buildOpCatalog/);
+  assert.match(deploy, /RATE_LIMIT_CLONE_PER_IP_PER_DAY/);
 });
 
 test("GitHub workflow generates and deploys each OP independently", async () => {

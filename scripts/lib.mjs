@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -96,6 +97,15 @@ export async function bundle(entryPoint, options = {}) {
   });
   if (!output.outputFiles[0]) throw new Error(`esbuild produced no output for ${entryPoint}`);
   return output.outputFiles[0].text;
+}
+
+/** Bundles a TypeScript module for Node and imports it, so build scripts and tests can reuse worker code. */
+export async function importTsModule(entryPoint, options = {}) {
+  const code = await bundle(entryPoint, { platform: "node", conditions: [], ...options });
+  const directory = await mkdtemp(path.join(os.tmpdir(), "maronn-ts-"));
+  const file = path.join(directory, "module.mjs");
+  await writeFile(file, code);
+  return import(pathToFileURL(file).href);
 }
 
 export async function uploadWorker(infra, token, scriptName, code, bindings) {

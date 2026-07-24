@@ -38,7 +38,7 @@ class MockDatabase {
               const key = ["ip", ...params].join("|");
               database.counters.set(key, Math.max(0, (database.counters.get(key) ?? 0) - 1));
             } else if (sql.includes("INSERT INTO registry_requests")) {
-              database.requests.set(params[0], { request_id: params[0], status: "pending", op_id: params[1], name: params[2], config_json: params[3], ip_key: params[4], created_at: params[5], url: null, error: null });
+              database.requests.set(params[0], { request_id: params[0], status: "pending", op_id: params[1], name: params[2], config_json: params[3], ip_key: params[4], clone_token_hash: params[5], created_at: params[6], url: null, error: null });
             } else if (sql.includes("INSERT INTO oidc_users")) {
               database.users.push({ op_id: params[0], username: params[1], password_hash: params[2], password_salt: params[3], iterations: params[4], claims_json: params[5] });
             } else if (sql.includes("UPDATE registry_requests SET status = 'failed'")) {
@@ -150,7 +150,11 @@ test("public creation returns no secret and writes a hashed D1 user", async () =
     assert.equal(DB.requests.size, 1);
     assert.equal(DB.users.length, 1);
     assert.notEqual(DB.users[0].password_hash, "correct-horse-battery");
-    const config = JSON.parse([...DB.requests.values()][0].config_json);
+    assert.match(result.clone_token, /^[A-Za-z0-9_-]{30,}$/);
+    const stored = [...DB.requests.values()][0];
+    assert.match(stored.clone_token_hash, /^[A-Za-z0-9_-]{43}$/);
+    assert.notEqual(stored.clone_token_hash, result.clone_token);
+    const config = JSON.parse(stored.config_json);
     assert.equal(config.client_type, "public");
     assert.equal(config.redirect_url, "https://client.example/callback");
     assert.deepEqual(config.scopes, ["openid", "profile", "email"]);

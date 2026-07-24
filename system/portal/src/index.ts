@@ -1,7 +1,10 @@
+import { handleGitRequest } from "./git-http.js";
+
 interface Env {
   DB: D1Database;
   RATE_LIMIT_PER_IP_PER_DAY: string;
   RATE_LIMIT_GLOBAL_PER_DAY: string;
+  RATE_LIMIT_CLONE_PER_IP_PER_DAY: string;
   GITHUB_OWNER: string;
   GITHUB_REPO: string;
   GITHUB_DISPATCH_TOKEN: string;
@@ -285,8 +288,11 @@ function showResult(data, credentials) {
   const title = document.createElement('strong'); title.textContent = 'OPを作成しました'; box.append(title);
   const fields = [['OP URL', data.url], ['クライアントID', credentials.client_id]];
   if (credentials.client_secret) fields.push(['クライアントシークレット', credentials.client_secret]);
+  if (data.op_id && credentials.clone_token) fields.push(['ソースの取得', 'git clone ' + location.origin.replace('://', '://' + data.op_id + ':' + credentials.clone_token + '@') + '/' + data.op_id + '.git']);
   for (const [label, value] of fields) { const row = document.createElement('div'); row.className = 'credential'; const key = document.createElement('span'); key.textContent = label; const code = document.createElement('code'); code.textContent = value; row.append(key, code); box.append(row); }
-  const note = document.createElement('p'); note.textContent = credentials.client_secret ? 'シークレットは再表示できません。今すぐ安全な場所へ保存してください。' : 'publicクライアントのためシークレットは発行されません。'; box.append(note); statusBox.append(box);
+  const note = document.createElement('p'); note.textContent = credentials.client_secret ? 'シークレットは再表示できません。今すぐ安全な場所へ保存してください。' : 'publicクライアントのためシークレットは発行されません。'; box.append(note);
+  const clone = document.createElement('p'); clone.textContent = 'このOPを生成したコードはそのままcloneできます。cloneコマンドに含まれるトークンも再表示できないため、必要なら控えてください。OPは24時間で自動削除されますが、cloneしたリポジトリは手元に残り、自分のCloudflareアカウントへデプロイし直せます。手順はREADME.mdにあります。'; box.append(clone);
+  statusBox.append(box);
 }
 
 async function poll(requestId, credentials, startedAt) {
@@ -315,7 +321,7 @@ form.addEventListener('submit', async (event) => {
     const response = await fetch('/api/apps', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); const data = await response.json();
     if (response.status === 429) { exhausted = true; throw new Error('本日の作成上限に達しました'); }
     if (!response.ok) throw new Error(data.message || data.error || 'request failed');
-    textStatus('OPを作成しています…'); poll(data.request_id, { client_id: data.client_id, client_secret: data.client_secret }, Date.now());
+    textStatus('OPを作成しています…'); poll(data.request_id, { client_id: data.client_id, client_secret: data.client_secret, clone_token: data.clone_token }, Date.now());
   } catch (error) { textStatus('作成に失敗しました（' + error.message + '）'); setBusy(false); }
   await refreshQuota();
 });
@@ -461,6 +467,11 @@ function allocateOpId(now = Date.now()): string {
   return `maronn-op-${Math.floor(now / 1000).toString(36)}${randomBase64Url(5).replace(/[-_]/g, "a").toLowerCase().slice(0, 6)}`;
 }
 
+/** The clone token is only ever shown once, so D1 keeps a digest rather than the token itself. */
+async function hashCloneToken(token: string): Promise<string> {
+  return randomBytesToBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token))));
+}
+
 async function hashPassword(password: string): Promise<{ hash: string; salt: string; iterations: number }> {
   const saltBytes = crypto.getRandomValues(new Uint8Array(16));
   const passwordBytes = new TextEncoder().encode(password);
@@ -530,9 +541,10 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
     scopes: input.scopes,
     features: input.features,
   };
+  const cloneToken = randomBase64Url(24);
   const hashedUsers = await Promise.all(input.users.map(async (user) => ({ username: user.username, ...(await hashPassword(user.password)) })));
   const statements = [
-    env.DB.prepare(`INSERT INTO registry_requests (request_id, status, op_id, name, config_json, ip_key, created_at, updated_at) VALUES (?1, 'pending', ?2, ?3, ?4, ?5, ?6, ?6)`).bind(requestId, opId, input.name || opId, JSON.stringify(requestConfig), key, now),
+    env.DB.prepare(`INSERT INTO registry_requests (request_id, status, op_id, name, config_json, ip_key, clone_token_hash, created_at, updated_at) VALUES (?1, 'pending', ?2, ?3, ?4, ?5, ?6, ?7, ?7)`).bind(requestId, opId, input.name || opId, JSON.stringify(requestConfig), key, await hashCloneToken(cloneToken), now),
     ...hashedUsers.map((user) => env.DB.prepare(`INSERT INTO oidc_users (op_id, username, password_hash, password_salt, password_iterations, claims_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`).bind(opId, user.username, user.hash, user.salt, user.iterations, JSON.stringify({ sub: user.username, name: user.username, preferred_username: user.username }), now)),
   ];
   await env.DB.batch(statements);
@@ -546,7 +558,7 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
     ]);
     return errorResponse("dispatch_failed", "failed to start the generation workflow", 502);
   }
-  return json({ request_id: requestId, client_id: clientId, ...(clientSecret ? { client_secret: clientSecret } : {}) }, 202);
+  return json({ request_id: requestId, client_id: clientId, clone_token: cloneToken, ...(clientSecret ? { client_secret: clientSecret } : {}) }, 202);
 }
 
 async function route(request: Request, env: Env): Promise<Response> {
@@ -555,6 +567,8 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (request.method === "GET" && url.pathname === "/api/quota") return handleQuota(request, env);
   if (request.method === "GET" && url.pathname.startsWith("/api/requests/")) return handleStatus(decodeURIComponent(url.pathname.slice(14)), env);
   if (request.method === "POST" && url.pathname === "/api/apps") return handleCreate(request, env);
+  const git = await handleGitRequest(request, url, env, ipKey(request.headers.get("CF-Connecting-IP")));
+  if (git) return git;
   return errorResponse("not_found", "route was not found", 404);
 }
 

@@ -13,11 +13,13 @@
   "scripts": {
     "build": "npm run build:portal",
     "build:portal": "node scripts/build-portal.mjs",
+    "build:catalog": "node scripts/build-op-catalog.mjs",
     "setup": "node scripts/setup.mjs",
     "deploy:portal": "node scripts/deploy-portal.mjs",
     "deploy:reaper": "node scripts/deploy-reaper.mjs",
+    "pretest": "npm run build:catalog",
     "test": "node --test test/*.test.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "npm run build:catalog && tsc --noEmit",
     "audit:scripts": "bash -n guide.sh && for file in scripts/*.mjs; do node --check \"$file\" || exit 1; done",
     "check": "npm run typecheck && npm run audit:scripts && npm test && npm run build"
   },

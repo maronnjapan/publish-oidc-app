@@ -1,6 +1,7 @@
 node_modules/
 dist/
 apps/
+system/portal/src/op-catalog.generated.ts
 .setup-guide-state
 .setup-guide-config
 *.log

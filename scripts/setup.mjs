@@ -12,7 +12,7 @@ const DATABASE_NAME = "maronn-oidc-shared-d1";
 const COMPATIBILITY_DATE = "2026-07-01";
 
 export const SCHEMA_STATEMENTS = [
-  `CREATE TABLE IF NOT EXISTS registry_requests (request_id TEXT PRIMARY KEY, status TEXT NOT NULL, op_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, config_json TEXT, url TEXT, error TEXT, ip_key TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS registry_requests (request_id TEXT PRIMARY KEY, status TEXT NOT NULL, op_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, config_json TEXT, url TEXT, error TEXT, ip_key TEXT NOT NULL, clone_token_hash TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS idx_registry_requests_status ON registry_requests (status, created_at)`,
   `CREATE TABLE IF NOT EXISTS registry_ops (op_id TEXT PRIMARY KEY, script_name TEXT NOT NULL UNIQUE, name TEXT NOT NULL, url TEXT NOT NULL, client_id TEXT NOT NULL, client_type TEXT NOT NULL, redirect_uri TEXT NOT NULL, scopes_json TEXT NOT NULL, features_json TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT, status TEXT NOT NULL DEFAULT 'active')`,
   `CREATE TABLE IF NOT EXISTS registry_rate_limits (scope TEXT NOT NULL, key TEXT NOT NULL, date_utc TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (scope, key, date_utc))`,
@@ -54,6 +54,7 @@ async function applySchema(accountId, token, databaseId) {
     if (!first?.success) throw new Error(`D1 schema statement failed: ${sql.slice(0, 60)}`);
   }
   await ensureRegistryOpsExpiry(accountId, token, databaseId);
+  await ensureRegistryRequestsCloneToken(accountId, token, databaseId);
 }
 
 async function runD1Statement(accountId, token, databaseId, sql, params = []) {
@@ -83,6 +84,15 @@ export async function ensureRegistryOpsExpiry(accountId, token, databaseId) {
     databaseId,
     "CREATE INDEX IF NOT EXISTS idx_registry_ops_expiry ON registry_ops (status, expires_at)",
   );
+}
+
+/** Adds the clone token column to databases created before `git clone` support existed. */
+export async function ensureRegistryRequestsCloneToken(accountId, token, databaseId) {
+  const tableInfo = await runD1Statement(accountId, token, databaseId, "PRAGMA table_info(registry_requests)");
+  const columns = new Set((Array.isArray(tableInfo.results) ? tableInfo.results : []).map((row) => row.name));
+  if (!columns.has("clone_token_hash")) {
+    await runD1Statement(accountId, token, databaseId, "ALTER TABLE registry_requests ADD COLUMN clone_token_hash TEXT");
+  }
 }
 
 async function main() {

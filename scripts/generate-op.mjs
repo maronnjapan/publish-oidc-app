@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { OP_ID_PATTERN, ROOT } from "./lib.mjs";
 
 const execFile = promisify(execFileCallback);
-const FEATURES = ["pkce", "refresh-token", "introspection", "revocation", "request-object"];
+export const FEATURES = ["pkce", "refresh-token", "introspection", "revocation", "request-object"];
 
 function parseConfig(text, opId) {
   let config;
@@ -41,18 +41,23 @@ async function patchGeneratedSource(providerDirectory) {
   await writeFile(discoveryPath, discovery);
 }
 
-export async function generateOp(opId, configPath) {
-  if (!OP_ID_PATTERN.test(opId)) throw new Error("invalid op_id");
-  const config = parseConfig(await readFile(configPath, "utf8"), opId);
-  const appDirectory = path.join(ROOT, "apps", opId);
-  const sourceDirectory = path.join(appDirectory, "src");
-  const providerDirectory = path.join(sourceDirectory, "oidc-provider");
-  await mkdir(providerDirectory, { recursive: true });
-
+export async function readCliPackage() {
   const rootPackage = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"));
   const cliPackage = rootPackage.config?.maronnOidcCli;
   if (typeof cliPackage !== "string" || !/^@maronn-oidc\/cli@\d+\.\d+\.\d+$/.test(cliPackage)) throw new Error("package.json config.maronnOidcCli must be an exact package version");
-  const disabled = FEATURES.filter((name) => config.features[name] === false);
+  return { rootPackage, cliPackage };
+}
+
+/**
+ * Writes the complete `src/` tree for one feature selection. The output depends only on the
+ * feature flags, which is what lets the portal serve `git clone` from a build-time catalog
+ * instead of storing a copy of every generated OP.
+ */
+export async function generateProviderSources(features, sourceDirectory) {
+  const providerDirectory = path.join(sourceDirectory, "oidc-provider");
+  await mkdir(providerDirectory, { recursive: true });
+  const { cliPackage } = await readCliPackage();
+  const disabled = FEATURES.filter((name) => features[name] === false);
   const args = ["exec", "--yes", `--package=${cliPackage}`, "--", "maronn-oidc", "generate", "hono", "--output", providerDirectory];
   if (disabled.length > 0) args.push("--disable", disabled.join(","));
   await execFile("npm", args, { cwd: ROOT, maxBuffer: 10 * 1024 * 1024 });
@@ -62,6 +67,16 @@ export async function generateOp(opId, configPath) {
   await cp(path.join(ROOT, "templates", "cloudflare", "persistence.ts"), path.join(providerDirectory, "persistence.ts"));
   await cp(path.join(ROOT, "templates", "cloudflare", "index.ts"), path.join(sourceDirectory, "index.ts"));
   await patchGeneratedSource(providerDirectory);
+  return { cliPackage, providerDirectory };
+}
+
+export async function generateOp(opId, configPath) {
+  if (!OP_ID_PATTERN.test(opId)) throw new Error("invalid op_id");
+  const config = parseConfig(await readFile(configPath, "utf8"), opId);
+  const appDirectory = path.join(ROOT, "apps", opId);
+  const sourceDirectory = path.join(appDirectory, "src");
+  const { rootPackage } = await readCliPackage();
+  const { cliPackage } = await generateProviderSources(config.features, sourceDirectory);
 
   const metadata = {
     op_id: opId,

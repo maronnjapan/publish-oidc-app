@@ -230,11 +230,16 @@ step6() {
 
 完了後、publicならOP URLとClient ID、confidentialなら加えてClient Secretが
 一度だけ表示されます。OP URLの /.well-known/openid-configuration も確認します。
-発行したOP Workerとその共有D1データは、デプロイから約24時間後（cron間隔を含め
-最大約24時間15分後）に自動削除されます。機微な本番データは登録しないでください。
+同じ画面に表示される次のコマンドで、発行に使われたコードをそのまま取得できます。
+  git clone https://<op_id>:<clone token>@${portal_url#https://}/<op_id>.git
+cloneトークンは作成時に1回だけ表示され、共有D1にはダイジェストのみ保存します。
+コードはどこにも保存せず、cloneのたびに設定から組み立てて返すためストレージ費用は
+かかりません。発行したOP Workerとその共有D1データは、デプロイから約24時間後（cron
+間隔を含め最大約24時間15分後）に自動削除されますが、cloneしたリポジトリは手元に
+残ります。機微な本番データは登録しないでください。
 EOF
   if command -v curl >/dev/null 2>&1; then curl --fail --silent --show-error "$portal_url/api/quota" >/dev/null && ok "ポータルAPIが応答しました。" || warn "まだ応答しません。デプロイログを確認してください。"; fi
-  confirm "画面からOPを作成し、発行情報とDiscoveryを確認できましたか？" || return 1
+  confirm "画面からOPを作成し、発行情報・Discovery・git cloneを確認できましたか？" || return 1
   mark_done step6
   ok "セットアップは完了です。"
 }
