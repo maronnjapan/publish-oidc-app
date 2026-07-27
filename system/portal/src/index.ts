@@ -30,10 +30,17 @@ interface CreateInput {
   users: PortalUser[];
 }
 
+interface ParseFailure {
+  ok: false;
+  message: string;
+}
+
+type ParseResult = { ok: true; value: CreateInput } | ParseFailure;
+
 const FEATURE_NAMES = ["pkce", "refresh-token", "introspection", "revocation", "request-object"] as const;
 type FeatureName = (typeof FEATURE_NAMES)[number];
 const OPTIONAL_SCOPES = ["profile", "email", "address", "phone", "offline_access"] as const;
-const NAME_PATTERN = /^[a-zA-Z0-9 _-]{0,40}$/;
+const NAME_PATTERN = /^[^\u0000-\u001f\u007f]{0,40}$/u;
 const USERNAME_PATTERN = /^[a-zA-Z0-9._@-]{1,64}$/;
 const PASSWORD_HASH_ROUNDS = 1;
 
@@ -98,12 +105,13 @@ const HTML = String.raw`<!doctype html>
     <section class="card">
       <h2>アプリ設定</h2>
       <div class="grid">
-        <div><label class="block" for="name">表示名（任意）</label><input id="name" maxlength="40" pattern="[a-zA-Z0-9 _-]*" autocomplete="off"></div>
+        <div><label class="block" for="name">表示名（任意）</label><input id="name" maxlength="40" autocomplete="off"></div>
         <div><label class="block" for="redirect-url">ログイン後のリダイレクトURL</label><input id="redirect-url" type="url" required placeholder="https://example.com/callback"></div>
         <div><label class="block" for="client-type">クライアント種別</label><select id="client-type"><option value="public">public</option><option value="confidential">confidential</option></select></div>
         <div><label class="block">テンプレート</label><input value="Hono（固定）" disabled></div>
       </div>
       <p class="hint">クライアントIDは自動発行されます。confidentialではクライアントシークレットも作成完了後に一度だけ表示します。</p>
+      <p class="hint">リダイレクトURLはhttps（localhostと127.0.0.1のみhttp可）で指定し、#以降のフラグメントは含められません。表示名は40文字以内で日本語も使えます。</p>
     </section>
 
     <section class="card">
@@ -140,6 +148,7 @@ const HTML = String.raw`<!doctype html>
       </div>
       <p class="hint" id="csv-feedback" aria-live="polite"></p>
       <div class="csv-preview" id="csv-preview" hidden></div>
+      <p class="hint">ユーザー名は半角英数字と <code>. _ @ -</code> のみ（1〜64文字）、パスワードは8〜128文字です。</p>
       <p class="hint">CSVは先頭行を <code>username,password</code> とし、合計5件まで指定できます。パスワードは共有D1へ個別salt付きSHA-256ハッシュとして保存します。</p>
     </section>
 
@@ -161,6 +170,11 @@ const csvInput = document.querySelector('#csv');
 const csvFeedback = document.querySelector('#csv-feedback');
 const csvPreview = document.querySelector('#csv-preview');
 const userCount = document.querySelector('#user-count');
+const redirectInput = document.querySelector('#redirect-url');
+const nameInput = document.querySelector('#name');
+const USERNAME_RULE = /^[a-zA-Z0-9._@-]{1,64}$/;
+const USERNAME_HINT = 'ユーザー名は半角英数字と . _ @ - のみ、1〜64文字で入力してください';
+const PASSWORD_HINT = 'パスワードは8〜128文字で入力してください';
 let exhausted = false;
 let operationBusy = false;
 let nextUserId = 1;
@@ -177,12 +191,13 @@ function addUser(username = '', password = '') {
   const index = nextUserId++;
   const u = document.createElement('div');
   const ul = document.createElement('label'); ul.className = 'block'; ul.textContent = 'ユーザー名'; ul.htmlFor = 'username-' + index;
-  const ui = document.createElement('input'); ui.id = 'username-' + index; ui.type = 'text'; ui.className = 'username'; ui.required = true; ui.maxLength = 64; ui.pattern = '[a-zA-Z0-9._@-]+'; ui.autocomplete = 'username'; ui.value = username;
+  const ui = document.createElement('input'); ui.id = 'username-' + index; ui.type = 'text'; ui.className = 'username'; ui.required = true; ui.maxLength = 64; ui.autocomplete = 'username'; ui.title = USERNAME_HINT; ui.value = username;
   ui.addEventListener('input', () => ui.setCustomValidity(''));
   u.append(ul, ui);
   const p = document.createElement('div');
   const pl = document.createElement('label'); pl.className = 'block'; pl.textContent = 'パスワード'; pl.htmlFor = 'password-' + index;
-  const pi = document.createElement('input'); pi.id = 'password-' + index; pi.type = 'password'; pi.className = 'password'; pi.required = true; pi.minLength = 8; pi.maxLength = 128; pi.autocomplete = 'new-password'; pi.value = password;
+  const pi = document.createElement('input'); pi.id = 'password-' + index; pi.type = 'password'; pi.className = 'password'; pi.required = true; pi.maxLength = 128; pi.autocomplete = 'new-password'; pi.title = PASSWORD_HINT; pi.value = password;
+  pi.addEventListener('input', () => pi.setCustomValidity(''));
   p.append(pl, pi);
   const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'danger'; remove.textContent = '削除'; remove.addEventListener('click', () => { if (users.children.length > 1) { row.remove(); updateUserControls(); } });
   row.append(u, p, remove); users.append(row); updateUserControls(); return true;
@@ -210,7 +225,7 @@ function validateCsvRows(rows) {
     const username = (row[0] || '').trim();
     const password = row[1] || '';
     if (row.length !== 2) errors.push('列数は2列にしてください');
-    if (!/^[a-zA-Z0-9._@-]{1,64}$/.test(username)) errors.push('ユーザー名の形式が不正です');
+    if (!USERNAME_RULE.test(username)) errors.push('ユーザー名の形式が不正です');
     if (seen.has(username)) errors.push('ユーザー名が重複しています');
     if (username) seen.add(username);
     if (password.length < 8 || password.length > 128) errors.push('パスワードは8〜128文字にしてください');
@@ -238,12 +253,35 @@ function renderCsvPreview(fileName, entries, countError = '') {
   table.append(body); csvPreview.append(table);
 }
 
-function validateUniqueUsers() {
+function redirectUrlError(value) {
+  let url;
+  try { url = new URL(value); } catch { return 'URLの形式が正しくありません（例: https://example.com/callback）'; }
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) return 'httpsのURL、またはlocalhost・127.0.0.1のhttp URLを指定してください';
+  if (url.username || url.password) return 'URLにユーザー名やパスワードを含めないでください';
+  if (url.hash) return 'URLに#以降のフラグメントを含めないでください';
+  if (value.length > 2048) return 'URLは2048文字以内で入力してください';
+  return '';
+}
+
+function validateRedirectField() {
+  redirectInput.setCustomValidity('');
+  if (!redirectInput.value) return true;
+  const message = redirectUrlError(redirectInput.value.trim());
+  redirectInput.setCustomValidity(message);
+  return !message;
+}
+
+function validateUserFields() {
   const seen = new Set(); let valid = true;
-  for (const input of users.querySelectorAll('.username')) {
-    input.setCustomValidity('');
-    if (seen.has(input.value)) { input.setCustomValidity('同じユーザー名は複数登録できません'); valid = false; }
-    seen.add(input.value);
+  for (const row of users.querySelectorAll('.user')) {
+    const username = row.querySelector('.username');
+    const password = row.querySelector('.password');
+    username.setCustomValidity(''); password.setCustomValidity('');
+    username.value = username.value.trim();
+    if (!USERNAME_RULE.test(username.value)) { username.setCustomValidity(USERNAME_HINT); valid = false; }
+    else if (seen.has(username.value)) { username.setCustomValidity('同じユーザー名は複数登録できません'); valid = false; }
+    seen.add(username.value);
+    if (password.value.length < 8 || password.value.length > 128) { password.setCustomValidity(PASSWORD_HINT); valid = false; }
   }
   return valid;
 }
@@ -302,10 +340,14 @@ async function poll(requestId, credentials, startedAt) {
 }
 
 form.addEventListener('submit', async (event) => {
-  event.preventDefault(); validateUniqueUsers(); if (!form.reportValidity()) return; setBusy(true); textStatus('作成リクエストを送信しています…');
+  event.preventDefault();
+  validateRedirectField(); validateUserFields();
+  if (users.children.length < 1) { textStatus('ログインユーザーを1件以上登録してください。'); return; }
+  if (!form.reportValidity()) { textStatus('入力内容を確認してください。'); return; }
+  setBusy(true); textStatus('作成リクエストを送信しています…');
   const body = {
-    name: document.querySelector('#name').value,
-    redirect_url: document.querySelector('#redirect-url').value,
+    name: nameInput.value.trim(),
+    redirect_url: redirectInput.value.trim(),
     client_type: document.querySelector('#client-type').value,
     scopes: ['openid', ...[...document.querySelectorAll('.scope:checked')].map((e) => e.value)],
     features: Object.fromEntries([...document.querySelectorAll('.feature')].map((e) => [e.value, e.checked])),
@@ -319,6 +361,9 @@ form.addEventListener('submit', async (event) => {
   } catch (error) { textStatus('作成に失敗しました（' + error.message + '）'); setBusy(false); }
   await refreshQuota();
 });
+
+redirectInput.addEventListener('input', () => redirectInput.setCustomValidity(''));
+redirectInput.addEventListener('blur', () => validateRedirectField());
 
 document.querySelector('.feature[value="refresh-token"]').addEventListener('change', (event) => {
   const offline = document.querySelector('.scope[value="offline_access"]');
@@ -425,29 +470,53 @@ function validateRedirectUrl(value: unknown): string | null {
   } catch { return null; }
 }
 
-function validateInput(value: unknown): CreateInput | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+function invalid(message: string): ParseFailure {
+  return { ok: false, message };
+}
+
+function parseInput(value: unknown): ParseResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return invalid("request body must be a JSON object");
   const body = value as Record<string, unknown>;
-  const name = body.name ?? "";
+  const rawName = body.name ?? "";
+  if (typeof rawName !== "string") return invalid("display name must be a string");
+  const name = rawName.trim();
+  if (!NAME_PATTERN.test(name)) return invalid("display name must be 40 characters or fewer and must not contain control characters");
   const redirectUrl = validateRedirectUrl(body.redirect_url);
+  if (!redirectUrl) return invalid("redirect URL must be an https URL (http is allowed only on localhost) without credentials or a fragment");
   const clientType = body.client_type;
-  if (typeof name !== "string" || !NAME_PATTERN.test(name) || !redirectUrl || (clientType !== "public" && clientType !== "confidential")) return null;
-  if (!Array.isArray(body.scopes) || body.scopes[0] !== "openid" || new Set(body.scopes).size !== body.scopes.length || body.scopes.some((scope) => scope !== "openid" && !(OPTIONAL_SCOPES as readonly unknown[]).includes(scope))) return null;
-  if (!body.features || typeof body.features !== "object" || Array.isArray(body.features)) return null;
+  if (clientType !== "public" && clientType !== "confidential") return invalid("client type must be either public or confidential");
+  if (!Array.isArray(body.scopes) || body.scopes[0] !== "openid") return invalid("scopes must be an array whose first entry is openid");
+  if (new Set(body.scopes).size !== body.scopes.length) return invalid("scopes must not contain duplicates");
+  const unknownScope = body.scopes.find((scope) => scope !== "openid" && !(OPTIONAL_SCOPES as readonly unknown[]).includes(scope));
+  if (unknownScope !== undefined) return invalid(`scope ${JSON.stringify(unknownScope)} is not supported`);
+  if (!body.features || typeof body.features !== "object" || Array.isArray(body.features)) return invalid("features must be an object");
   const rawFeatures = body.features as Record<string, unknown>;
-  if (Object.keys(rawFeatures).some((key) => !(FEATURE_NAMES as readonly string[]).includes(key)) || FEATURE_NAMES.some((key) => typeof rawFeatures[key] !== "boolean")) return null;
-  if (body.scopes.includes("offline_access") && rawFeatures["refresh-token"] !== true) return null;
-  if (!Array.isArray(body.users) || body.users.length < 1 || body.users.length > 5) return null;
+  const unknownFeature = Object.keys(rawFeatures).find((key) => !(FEATURE_NAMES as readonly string[]).includes(key));
+  if (unknownFeature !== undefined) return invalid(`feature ${JSON.stringify(unknownFeature)} is not supported`);
+  const missingFeature = FEATURE_NAMES.find((key) => typeof rawFeatures[key] !== "boolean");
+  if (missingFeature !== undefined) return invalid(`feature ${JSON.stringify(missingFeature)} must be true or false`);
+  if (body.scopes.includes("offline_access") && rawFeatures["refresh-token"] !== true) return invalid("the offline_access scope requires the refresh-token feature");
+  if (!Array.isArray(body.users) || body.users.length < 1 || body.users.length > 5) return invalid("users must contain between 1 and 5 accounts");
   const usernames = new Set<string>();
   const parsedUsers: PortalUser[] = [];
-  for (const item of body.users) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
-    const username = (item as Record<string, unknown>).username;
+  for (const [index, item] of body.users.entries()) {
+    const position = `user ${index + 1}`;
+    if (!item || typeof item !== "object" || Array.isArray(item)) return invalid(`${position} must be an object`);
+    const rawUsername = (item as Record<string, unknown>).username;
     const password = (item as Record<string, unknown>).password;
-    if (typeof username !== "string" || !USERNAME_PATTERN.test(username) || usernames.has(username) || typeof password !== "string" || password.length < 8 || password.length > 128) return null;
+    if (typeof rawUsername !== "string") return invalid(`${position} must have a username`);
+    const username = rawUsername.trim();
+    if (!USERNAME_PATTERN.test(username)) return invalid(`${position} username must be 1-64 characters of a-z, A-Z, 0-9, dot, underscore, at sign, or hyphen`);
+    if (usernames.has(username)) return invalid(`username ${JSON.stringify(username)} is registered twice`);
+    if (typeof password !== "string" || password.length < 8 || password.length > 128) return invalid(`${position} password must be between 8 and 128 characters`);
     usernames.add(username); parsedUsers.push({ username, password });
   }
-  return { name, redirectUrl, clientType, scopes: body.scopes as string[], features: rawFeatures as Record<FeatureName, boolean>, users: parsedUsers };
+  return { ok: true, value: { name, redirectUrl, clientType, scopes: body.scopes as string[], features: rawFeatures as Record<FeatureName, boolean>, users: parsedUsers } };
+}
+
+function validateInput(value: unknown): CreateInput | null {
+  const result = parseInput(value);
+  return result.ok ? result.value : null;
 }
 
 function randomBase64Url(bytes: number): string {
@@ -509,8 +578,9 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
   if (contentLength > 20_000) return errorResponse("payload_too_large", "request body is too large", 413);
   let raw: unknown;
   try { raw = await request.json(); } catch { return errorResponse("invalid_input", "request body must be valid JSON", 400); }
-  const input = validateInput(raw);
-  if (!input) return errorResponse("invalid_input", "application settings or users are invalid", 400);
+  const parsed = parseInput(raw);
+  if (!parsed.ok) return errorResponse("invalid_input", parsed.message, 400);
+  const input = parsed.value;
 
   const key = ipKey(request.headers.get("CF-Connecting-IP"));
   const date = utcDate();
@@ -560,4 +630,4 @@ async function route(request: Request, env: Env): Promise<Response> {
 
 export default { async fetch(request: Request, env: Env): Promise<Response> { try { return await route(request, env); } catch (error) { console.error("portal request failed", error); return errorResponse("internal_error", "an internal error occurred", 500); } } } satisfies ExportedHandler<Env>;
 
-export { HTML, allocateOpId, applyRateLimit, hashPassword, ipKey, retryAfterUtcMidnight, route, validateInput, validateRedirectUrl };
+export { HTML, allocateOpId, applyRateLimit, hashPassword, ipKey, parseInput, retryAfterUtcMidnight, route, validateInput, validateRedirectUrl };

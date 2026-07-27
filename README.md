@@ -86,6 +86,7 @@ bob,another-long-password
 
 - `public`: `token_endpoint_auth_method=none`。Client Secretは発行しません。安全ポリシーによりPKCEは常に必要です。
 - `confidential`: `token_endpoint_auth_method=client_secret_post`。Client Secretを一度だけ表示します。
+- 表示名: 任意項目です。40文字以内なら日本語などマルチバイト文字も使用できます（制御文字は拒否）。
 - リダイレクトURL: HTTPS、または開発用の`http://localhost`/loopbackのみ。fragmentやuserinfoは拒否します。
 - スコープ: `openid`は必須。任意で`profile email address phone offline_access`を選択できます。`offline_access`にはRefresh Token機能が必要です。
 
