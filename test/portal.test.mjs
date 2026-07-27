@@ -10,7 +10,7 @@ import { build } from "esbuild";
 const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "oidc-portal-test-"));
 const output = path.join(temporaryDirectory, "portal.mjs");
 await build({ entryPoints: [path.resolve("system/portal/src/index.ts")], bundle: true, platform: "node", format: "esm", outfile: output });
-const { HTML, allocateOpId, applyRateLimit, hashPassword, ipKey, route, validateInput, validateRedirectUrl } = await import(`${pathToFileURL(output).href}?${Date.now()}`);
+const { HTML, allocateOpId, applyRateLimit, hashPassword, ipKey, parseInput, route, validateInput, validateRedirectUrl } = await import(`${pathToFileURL(output).href}?${Date.now()}`);
 
 class MockDatabase {
   counters = new Map();
@@ -86,8 +86,9 @@ test("the inline portal script is valid JavaScript", () => {
 test("CSV parsing supports quoted fields and validates preview rows", () => {
   const script = HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1];
   const functions = script.slice(script.indexOf("function parseCsv"), script.indexOf("function renderCsvPreview"));
+  const usernameRule = script.match(/const USERNAME_RULE = \/.*\/;/)?.[0];
   const context = {};
-  vm.runInNewContext(`${functions}; this.parseCsv = parseCsv; this.validateCsvRows = validateCsvRows;`, context);
+  vm.runInNewContext(`${usernameRule}\n${functions}; this.parseCsv = parseCsv; this.validateCsvRows = validateCsvRows;`, context);
   const rows = context.parseCsv('alice,"long,password"\r\nbob,password-123\n');
   assert.deepEqual(Array.from(rows, (row) => Array.from(row)), [["alice", "long,password"], ["bob", "password-123"]]);
   assert.deepEqual(Array.from(context.validateCsvRows(rows), ({ username, errors }) => ({ username, errors: Array.from(errors) })), [
@@ -113,6 +114,70 @@ test("input validation enforces selected scopes, feature consistency, unique use
   assert.equal(validateInput({ ...createBody(), scopes: ["openid", "unknown"] }), null);
   assert.equal(validateInput({ ...createBody(), users: Array.from({ length: 6 }, (_, index) => ({ username: `user${index}`, password: "password-123" })) }), null);
   assert.equal(validateInput({ ...createBody(), users: [{ username: "same", password: "password-123" }, { username: "same", password: "password-456" }] }), null);
+});
+
+test("every HTML validation pattern compiles as a browser unicodeSets regular expression", () => {
+  const script = HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  const patterns = [
+    ...HTML.matchAll(/\spattern="([^"]*)"/g),
+    ...script.matchAll(/\.pattern\s*=\s*'([^']*)'/g),
+  ].map((match) => match[1]);
+  for (const pattern of patterns) assert.doesNotThrow(() => new RegExp(`^(?:${pattern})$`, "v"), `pattern ${pattern} is ignored by browsers that compile it with the v flag`);
+});
+
+test("display names accept multibyte text and reject control characters or overlong values", () => {
+  assert.equal(parseInput({ ...createBody(), name: "テスト用OP" }).value.name, "テスト用OP");
+  assert.equal(parseInput({ ...createBody(), name: "  余白付き  " }).value.name, "余白付き");
+  assert.equal(parseInput({ ...createBody(), name: "あ".repeat(40) }).ok, true);
+  assert.equal(parseInput({ ...createBody(), name: "あ".repeat(41) }).ok, false);
+  assert.equal(parseInput({ ...createBody(), name: "line\nbreak" }).ok, false);
+});
+
+test("rejected creations report the offending field instead of a generic message", async () => {
+  const cases = [
+    [{ ...createBody(), redirect_url: "http://example.com/callback" }, /redirect URL/],
+    [{ ...createBody(), client_type: "native" }, /client type/],
+    [{ ...createBody(), scopes: ["openid", "unknown"] }, /scope "unknown"/],
+    [{ ...createBody(), scopes: ["openid", "offline_access"], features: { ...features, "refresh-token": false } }, /offline_access/],
+    [{ ...createBody(), users: [{ username: "たろう", password: "password-123" }] }, /user 1 username/],
+    [{ ...createBody(), users: [{ username: "alice", password: "short" }] }, /user 1 password/],
+    [{ ...createBody(), users: [{ username: "same", password: "password-123" }, { username: "same", password: "password-456" }] }, /registered twice/],
+  ];
+  for (const [body, expected] of cases) {
+    const response = await route(createRequest(body), { DB: { prepare() { throw new Error("must not access D1"); } } });
+    const result = await response.json();
+    assert.equal(response.status, 400);
+    assert.equal(result.error, "invalid_input");
+    assert.match(result.message, expected);
+  }
+});
+
+test("usernames are trimmed before storage so padded input is accepted", async () => {
+  const DB = new MockDatabase();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 204 });
+  try {
+    const response = await route(createRequest({ ...createBody(), users: [{ username: "  alice  ", password: "correct-horse-battery" }] }), env(DB));
+    assert.equal(response.status, 202);
+    assert.equal(DB.users[0].username, "alice");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("the inline script enforces the same redirect URL and account rules as the Worker", () => {
+  const script = HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  const source = script.slice(script.indexOf("function redirectUrlError"), script.indexOf("function validateRedirectField"));
+  const context = { URL };
+  vm.runInNewContext(`${source}; this.redirectUrlError = redirectUrlError;`, context);
+  for (const url of ["https://example.com/callback", "http://localhost:3000/callback"]) {
+    assert.equal(context.redirectUrlError(url), "");
+    assert.equal(validateRedirectUrl(url), url);
+  }
+  for (const url of ["http://example.com/callback", "https://example.com/callback#fragment", "https://user:pass@example.com/callback", "not-a-url"]) {
+    assert.notEqual(context.redirectUrlError(url), "");
+    assert.equal(validateRedirectUrl(url), null);
+  }
+  const usernameRule = script.match(/const USERNAME_RULE = (\/.*\/);/)?.[1];
+  assert.equal(usernameRule, "/^[a-zA-Z0-9._@-]{1,64}$/");
 });
 
 test("IP keys retain IPv4 and aggregate IPv6 by canonical /64", () => {
