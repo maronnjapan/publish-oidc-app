@@ -48,7 +48,7 @@ npm run check             # 更新後に必ず実行
 自動実行は2系統あります。
 
 - `.github/workflows/check-package-updates.yml` — 毎週月曜00:00 UTC。バージョン更新をブランチへ適用してPRを作り（`npm run check` の結果もPR本文に載ります）、新しいexperimental機能があればIssueを立てます。
-- Claude Codeのルーティーンタスク — 同じチェックを走らせ、新機能が見つかったら下記の配線までを実施します。検出だけで終わらせないための担当です。
+- Claude Codeのルーティーンタスク（Routine `trig_01SXA2TNgjZWWvagYqAdJSWa`、毎週月曜03:00 UTC） — 同じチェックを走らせ、新機能が見つかったら下記の配線までを実施して `claude/maronn-oidc-experimental-followup` ブランチへPRを出します。検出だけで終わらせないための担当です。更新がなければ何もせず終了します。停止したい場合はこのトリガーIDを削除してください。
 
 ## 新しいexperimental機能を配線する手順
 

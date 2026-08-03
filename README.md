@@ -115,7 +115,10 @@ npm run packages:update   # 固定バージョンとexperimentalカタログを�
 npm run check             # 更新後の検証
 ```
 
-`check-package-updates.mjs`はレジストリの`dist-tags.latest`、experimentalの`exports` subpath（= feature-id）、最新CLIの`--help`が出す機能トグル一覧の3点を見ます。自動実行は`.github/workflows/check-package-updates.yml`（毎週月曜00:00 UTC、更新をPR化し新機能はIssue化）と、同じチェックから配線までを行うClaude Codeのルーティーンタスクの2系統です。
+`check-package-updates.mjs`はレジストリの`dist-tags.latest`、experimentalの`exports` subpath（= feature-id）、最新CLIの`--help`が出す機能トグル一覧の3点を見ます。自動実行は2系統です。
+
+- `.github/workflows/check-package-updates.yml`（毎週月曜00:00 UTC）— バージョン更新を`chore/maronn-oidc-package-updates`ブランチへ適用してPRを作り、未配線の新機能はIssueで追跡します。
+- Claude Codeのルーティーンタスク（毎週月曜03:00 UTC、トリガーID `trig_01SXA2TNgjZWWvagYqAdJSWa`）— 同じチェックに加えて、新しいexperimental機能をポータルで選択できる状態まで配線し`claude/maronn-oidc-experimental-followup`ブランチへPRを出します。更新がなければ何もしません。
 
 ## 開発
 
