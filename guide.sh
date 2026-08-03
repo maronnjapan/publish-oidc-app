@@ -228,6 +228,10 @@ step6() {
   4. PKCE等の機能
   5. UI入力またはCSVの1〜5ユーザー
 
+必要なら「試験的な機能」（@maronn-oidc/experimental、現在はPAR / RFC 9126）も
+選べます。APIが安定しておらず他の機能より適切に動かない可能性が高いため、
+動作検証にのみ使ってください。詳細は docs/experimental.md を参照してください。
+
 完了後、publicならOP URLとClient ID、confidentialなら加えてClient Secretが
 一度だけ表示されます。OP URLの /.well-known/openid-configuration も確認します。
 発行したOP Workerとその共有D1データは、デプロイから約24時間後（cron間隔を含め

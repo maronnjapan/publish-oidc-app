@@ -45,6 +45,29 @@ test("system deployment installs the 24-hour reaper and its 15-minute cron", asy
   assert.match(deploy, /ensureRegistryOpsExpiry/);
 });
 
+test("experimental features stay opt-in and are deployed as their own binding", async () => {
+  const template = await readFile("templates/cloudflare/index.ts", "utf8");
+  const deploy = await readFile("scripts/deploy-op.mjs", "utf8");
+  const persistence = await readFile("templates/cloudflare/persistence.ts", "utf8");
+  for (const marker of ["EXPERIMENTAL_IMPORT_PLACEHOLDER", "EXPERIMENTAL_RUNTIME_PLACEHOLDER", "EXPERIMENTAL_CONTEXT_PLACEHOLDER", "EXPERIMENTAL_ROUTE_PLACEHOLDER"]) {
+    assert.match(template, new RegExp(marker));
+  }
+  assert.match(deploy, /name: "EXPERIMENTAL_FEATURES"/);
+  // Type-only, so an OP without an experimental feature never bundles the package.
+  assert.match(persistence, /import type \{[\s\S]*?\} from '@maronn-oidc\/experimental\/par';/);
+  assert.match(persistence, /'par_request'/);
+});
+
+test("weekly package follow-up proposes updates and tracks unwired features", async () => {
+  const workflow = await readFile(".github/workflows/check-package-updates.yml", "utf8");
+  assert.match(workflow, /cron: "0 0 \* \* 1"/);
+  assert.match(workflow, /check-package-updates\.mjs --apply/);
+  assert.match(workflow, /npm run check/);
+  assert.match(workflow, /gh pr create/);
+  assert.match(workflow, /gh issue create/);
+  assert.match(workflow, /has_catalog_work == 'true'/);
+});
+
 test("guide covers secrets, shared D1, deployment, and smoke testing", async () => {
   const guide = await readFile("guide.sh", "utf8");
   assert.match(guide, /PORTAL_GITHUB_TOKEN/);

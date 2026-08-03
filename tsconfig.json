@@ -6,6 +6,7 @@
     "lib": ["ES2022", "WebWorker"],
     "types": ["@cloudflare/workers-types"],
     "strict": true,
+    "resolveJsonModule": true,
     "noEmit": true,
     "skipLibCheck": true
   },
@@ -13,7 +14,8 @@
     "system/**/*.ts",
     "templates/cloudflare/store.ts",
     "templates/cloudflare/resolvers.ts",
-    "templates/cloudflare/persistence.ts"
+    "templates/cloudflare/persistence.ts",
+    "templates/cloudflare/experimental/*.ts"
   ],
   "exclude": ["apps", "dist", "node_modules"]
 }

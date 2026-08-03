@@ -30,6 +30,7 @@ function parseRequestConfig(row, opId) {
   if (config.client_type === "confidential" && (typeof config.client_secret !== "string" || config.client_secret.length < 32)) throw new Error("confidential client secret is missing");
   if (!Array.isArray(config.scopes) || config.scopes[0] !== "openid") throw new Error("scopes are invalid");
   if (!config.features || FEATURES.some((feature) => typeof config.features[feature] !== "boolean")) throw new Error("features are invalid");
+  if (config.experimental !== undefined && (typeof config.experimental !== "object" || config.experimental === null || Array.isArray(config.experimental))) throw new Error("experimental selection is invalid");
   return { ...config, op_id: opId };
 }
 
@@ -66,6 +67,7 @@ export async function deployOp(opId) {
     { type: "plain_text", name: "OP_ID", text: opId },
     { type: "plain_text", name: "OP_ISSUER", text: issuer },
     { type: "plain_text", name: "ALLOWED_SCOPES", text: JSON.stringify(config.scopes) },
+    { type: "plain_text", name: "EXPERIMENTAL_FEATURES", text: JSON.stringify(generated.experimental) },
   ]);
   await setWorkerSecret(infra, token, opId, "OIDC_SIGNING_JWK", await createSigningJwk());
   await setWorkerSecret(infra, token, opId, "OIDC_CLIENT_CONFIG", JSON.stringify(client));
@@ -73,11 +75,11 @@ export async function deployOp(opId) {
 
   const now = new Date().toISOString();
   const expiresAt = new Date(Date.parse(now) + 24 * 60 * 60 * 1000).toISOString();
-  await d1Query(infra, token, `INSERT INTO registry_ops (op_id, script_name, name, url, client_id, client_type, redirect_uri, scopes_json, features_json, created_at, expires_at, status) VALUES (?1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active') ON CONFLICT(op_id) DO UPDATE SET url = excluded.url, created_at = excluded.created_at, expires_at = excluded.expires_at, status = 'active'`, [opId, config.name || opId, issuer, config.client_id, config.client_type, config.redirect_url, JSON.stringify(config.scopes), JSON.stringify(config.features), now, expiresAt]);
+  await d1Query(infra, token, `INSERT INTO registry_ops (op_id, script_name, name, url, client_id, client_type, redirect_uri, scopes_json, features_json, created_at, expires_at, status) VALUES (?1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active') ON CONFLICT(op_id) DO UPDATE SET url = excluded.url, created_at = excluded.created_at, expires_at = excluded.expires_at, status = 'active'`, [opId, config.name || opId, issuer, config.client_id, config.client_type, config.redirect_url, JSON.stringify(config.scopes), JSON.stringify({ ...config.features, experimental: generated.experimental }), now, expiresAt]);
   const sanitizedConfig = { ...config };
   delete sanitizedConfig.client_secret;
   await d1Query(infra, token, `UPDATE registry_requests SET status = 'deployed', url = ?2, error = NULL, config_json = ?3, updated_at = ?4 WHERE request_id = ?1`, [row.request_id, issuer, JSON.stringify(sanitizedConfig), now]);
-  return { opId, issuer, clientId: config.client_id, clientType: config.client_type };
+  return { opId, issuer, clientId: config.client_id, clientType: config.client_type, experimental: Object.keys(generated.experimental) };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

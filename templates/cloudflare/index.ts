@@ -2,12 +2,14 @@ import { Hono } from 'hono';
 import type { SigningKey, SigningKeyProvider } from '@maronn-oidc/core';
 import { applyOidc } from './oidc-provider/apply.js';
 import { createD1Runtime, type RuntimeClient } from './oidc-provider/persistence.js';
+// <!-- EXPERIMENTAL_IMPORT_PLACEHOLDER -->
 
 interface Env {
   DB: D1Database;
   OP_ID: string;
   OP_ISSUER: string;
   ALLOWED_SCOPES: string;
+  EXPERIMENTAL_FEATURES?: string;
   OIDC_CLIENT_CONFIG: string;
   OIDC_SIGNING_JWK: string;
 }
@@ -30,17 +32,34 @@ function signingKeyProvider(jwkText: string): SigningKeyProvider {
   };
 }
 
+/**
+ * Enabled @maronn-oidc/experimental features, keyed by feature id (see
+ * experimental-features.json). Absent or malformed means "no experimental feature".
+ */
+function parseExperimentalFeatures(value: string | undefined): Record<string, Record<string, unknown>> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function createWorkerApp(env: Env): Hono<{ Bindings: Env; Variables: Record<string, any> }> {
   const app = new Hono<{ Bindings: Env; Variables: Record<string, any> }>();
   const client = JSON.parse(env.OIDC_CLIENT_CONFIG) as RuntimeClient;
   const scopes = JSON.parse(env.ALLOWED_SCOPES) as string[];
   const runtime = createD1Runtime(env.DB, env.OP_ID, client);
+  const experimental = parseExperimentalFeatures(env.EXPERIMENTAL_FEATURES);
+  // <!-- EXPERIMENTAL_RUNTIME_PLACEHOLDER -->
 
   app.use('*', async (c, next) => {
     for (const [name, value] of Object.entries(runtime)) c.set(name, value);
     c.set('authCodeResolver', runtime.authorizationCodeResolver);
     c.set('tokenClientResolver', runtime.clientResolver);
     c.set('allowedScopes', scopes);
+    // <!-- EXPERIMENTAL_CONTEXT_PLACEHOLDER -->
     c.header('X-Content-Type-Options', 'nosniff');
     c.header('Referrer-Policy', 'no-referrer');
     c.header('X-Frame-Options', 'DENY');
@@ -56,12 +75,15 @@ function createWorkerApp(env: Env): Hono<{ Bindings: Env; Variables: Record<stri
     consentResolver: runtime.consentResolver,
     corsOrigins: '*',
   });
+  // Experimental routes mount after applyOidc so its context middleware runs first.
+  // <!-- EXPERIMENTAL_ROUTE_PLACEHOLDER -->
 
   app.get('/', (c) => c.json({
     issuer: env.OP_ISSUER,
     client_id: client.clientId,
     client_type: client.clientType,
     scopes_supported: scopes,
+    experimental_features: Object.keys(experimental),
     discovery: env.OP_ISSUER + '/.well-known/openid-configuration',
   }));
   return app;

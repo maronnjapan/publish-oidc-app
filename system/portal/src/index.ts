@@ -1,3 +1,5 @@
+import experimentalCatalog from "../../../experimental-features.json";
+
 interface Env {
   DB: D1Database;
   RATE_LIMIT_PER_IP_PER_DAY: string;
@@ -27,8 +29,29 @@ interface CreateInput {
   clientType: "public" | "confidential";
   scopes: string[];
   features: Record<FeatureName, boolean>;
+  experimental: ExperimentalSelection;
   users: PortalUser[];
 }
+
+interface ExperimentalOption {
+  id: string;
+  label: string;
+  default?: boolean;
+  hint?: string;
+}
+
+interface ExperimentalFeature {
+  id: string;
+  status: string;
+  subpath: string;
+  label: string;
+  spec: string;
+  summary: string;
+  endpoints: string[];
+  options?: ExperimentalOption[];
+}
+
+type ExperimentalSelection = Record<string, Record<string, boolean>>;
 
 interface ParseFailure {
   ok: false;
@@ -43,6 +66,41 @@ const OPTIONAL_SCOPES = ["profile", "email", "address", "phone", "offline_access
 const NAME_PATTERN = /^[^\u0000-\u001f\u007f]{0,40}$/u;
 const USERNAME_PATTERN = /^[a-zA-Z0-9._@-]{1,64}$/;
 const PASSWORD_HASH_ROUNDS = 1;
+
+// experimental-features.json is the single source of truth shared with the generator.
+// Only `supported` entries are wired into generated OPs, so only those are offered here.
+const EXPERIMENTAL_FEATURES: ExperimentalFeature[] = (experimentalCatalog.features as ExperimentalFeature[])
+  .filter((feature) => feature.status === "supported");
+
+const HTML_ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => HTML_ESCAPES[character]);
+}
+
+/** Renders the experimental section from the catalog so a new feature needs no UI edit. */
+function experimentalCard(): string {
+  if (EXPERIMENTAL_FEATURES.length === 0) return "";
+  const entries = EXPERIMENTAL_FEATURES.map((feature) => {
+    const options = (feature.options ?? []).map((option) => `
+          <div class="experimental-option-row">
+            <label><input class="experimental-option" type="checkbox" data-feature="${escapeHtml(feature.id)}" data-option="${escapeHtml(option.id)}"${option.default ? " checked" : ""} disabled> ${escapeHtml(option.label)}</label>${option.hint ? `
+            <p class="hint">${escapeHtml(option.hint)}</p>` : ""}
+          </div>`).join("");
+    return `
+        <div class="experimental-feature">
+          <label class="experimental-toggle"><input class="experimental-toggle-input" type="checkbox" value="${escapeHtml(feature.id)}" data-label="${escapeHtml(feature.label)}" data-endpoints="${escapeHtml(feature.endpoints.join(" / "))}"> ${escapeHtml(feature.label)}</label>
+          <p class="hint">${escapeHtml(feature.spec)} — ${escapeHtml(feature.summary)}</p>
+          <p class="hint">追加されるエンドポイント: <code>${escapeHtml(feature.endpoints.join(" / "))}</code></p>${options}
+        </div>`;
+  }).join("");
+  return `    <section class="card">
+      <fieldset><legend>試験的な機能（@maronn-oidc/experimental）</legend>
+        <p class="warning"><strong>注意:</strong> ここは <code>@maronn-oidc/experimental</code> の機能です。APIが安定しておらず、<strong>他の機能より適切に動作しない可能性が高い</strong>ため、動作検証にのみ使ってください。マイナーリリースでも破壊的変更や削除が起こり得ます。</p>${entries}
+      </fieldset>
+    </section>
+`;
+}
 
 const HTML = String.raw`<!doctype html>
 <html lang="ja">
@@ -88,7 +146,14 @@ const HTML = String.raw`<!doctype html>
     .csv-preview th, .csv-preview td { padding: .45rem .55rem; border-top: 1px solid #dce3ed; text-align: left; vertical-align: top; }
     .csv-preview .valid { color: #17613a; font-weight: 700; }
     .csv-preview .invalid { color: #a22020; font-weight: 700; }
+    .warning { margin: 0 0 1rem; padding: .8rem .9rem; background: #fff7e8; border: 1px solid #e6c98a; border-radius: .55rem; color: #6b4a05; }
+    .experimental-feature { padding: .85rem 0 0; border-top: 1px solid #e6ebf2; }
+    .experimental-feature:first-of-type { border-top: 0; padding-top: 0; }
+    .experimental-toggle { display: block; margin-bottom: .3rem; }
+    .experimental-option-row { margin: .5rem 0 .85rem 1.4rem; }
+    .experimental-option-row label { font-weight: 500; }
     .result { padding: 1rem; background: #eef8f2; border: 1px solid #b9dec6; border-radius: .55rem; }
+    .result .warning { margin-top: .9rem; }
     .credential { display: grid; grid-template-columns: 9rem 1fr; gap: .5rem; margin: .5rem 0; }
     code { word-break: break-all; user-select: all; }
     .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
@@ -139,6 +204,7 @@ const HTML = String.raw`<!doctype html>
       </fieldset>
     </section>
 
+${experimentalCard()}
     <section class="card">
       <div class="section-heading"><h2>登録予定のログインユーザー</h2><span class="count" id="user-count">0 / 5件</span></div>
       <div id="users"></div>
@@ -318,25 +384,45 @@ async function refreshQuota() {
   } catch { quota.textContent = '本日の残り作成回数を取得できませんでした'; }
 }
 
-function showResult(data, credentials) {
+function selectedExperimentalFeatures() {
+  return [...document.querySelectorAll('.experimental-toggle-input:checked')];
+}
+
+function collectExperimental() {
+  const selection = {};
+  for (const toggle of selectedExperimentalFeatures()) {
+    const options = {};
+    for (const option of document.querySelectorAll('.experimental-option[data-feature="' + toggle.value + '"]')) options[option.dataset.option] = option.checked;
+    selection[toggle.value] = options;
+  }
+  return selection;
+}
+
+function showResult(data, credentials, experimental) {
   statusBox.replaceChildren(); const box = document.createElement('div'); box.className = 'result';
   const title = document.createElement('strong'); title.textContent = 'OPを作成しました'; box.append(title);
   const fields = [['OP URL', data.url], ['クライアントID', credentials.client_id]];
   if (credentials.client_secret) fields.push(['クライアントシークレット', credentials.client_secret]);
   for (const [label, value] of fields) { const row = document.createElement('div'); row.className = 'credential'; const key = document.createElement('span'); key.textContent = label; const code = document.createElement('code'); code.textContent = value; row.append(key, code); box.append(row); }
-  const note = document.createElement('p'); note.textContent = credentials.client_secret ? 'シークレットは再表示できません。今すぐ安全な場所へ保存してください。' : 'publicクライアントのためシークレットは発行されません。'; box.append(note); statusBox.append(box);
+  const note = document.createElement('p'); note.textContent = credentials.client_secret ? 'シークレットは再表示できません。今すぐ安全な場所へ保存してください。' : 'publicクライアントのためシークレットは発行されません。'; box.append(note);
+  if (experimental.length) {
+    const warning = document.createElement('p'); warning.className = 'warning';
+    warning.textContent = '試験的な機能を有効にしています（' + experimental.map((entry) => entry.label + ': ' + entry.endpoints).join(' / ') + '）。@maronn-oidc/experimental はAPIが安定しておらず、他の機能より適切に動作しない可能性が高い点にご注意ください。';
+    box.append(warning);
+  }
+  statusBox.append(box);
 }
 
-async function poll(requestId, credentials, startedAt) {
+async function poll(requestId, credentials, startedAt, experimental) {
   if (Date.now() - startedAt > 10 * 60 * 1000) { textStatus('作成状況の確認がタイムアウトしました。'); setBusy(false); return; }
   try {
     const response = await fetch('/api/requests/' + encodeURIComponent(requestId)); const data = await response.json();
     if (!response.ok) throw new Error(data.message || 'status request failed');
-    if (data.status === 'deployed') { showResult(data, credentials); setBusy(false); return; }
+    if (data.status === 'deployed') { showResult(data, credentials, experimental); setBusy(false); return; }
     if (data.status === 'failed') { textStatus('作成に失敗しました（' + (data.error || 'ci_failed') + '）'); setBusy(false); return; }
     textStatus('OPを作成しています… 現在: ' + data.status);
   } catch { textStatus('状態を取得できませんでした。再試行しています…'); }
-  window.setTimeout(() => poll(requestId, credentials, startedAt), 3000);
+  window.setTimeout(() => poll(requestId, credentials, startedAt, experimental), 3000);
 }
 
 form.addEventListener('submit', async (event) => {
@@ -351,13 +437,15 @@ form.addEventListener('submit', async (event) => {
     client_type: document.querySelector('#client-type').value,
     scopes: ['openid', ...[...document.querySelectorAll('.scope:checked')].map((e) => e.value)],
     features: Object.fromEntries([...document.querySelectorAll('.feature')].map((e) => [e.value, e.checked])),
+    experimental: collectExperimental(),
     users: [...users.querySelectorAll('.user')].map((row) => ({ username: row.querySelector('.username').value, password: row.querySelector('.password').value }))
   };
+  const experimentalSummary = selectedExperimentalFeatures().map((toggle) => ({ label: toggle.dataset.label, endpoints: toggle.dataset.endpoints }));
   try {
     const response = await fetch('/api/apps', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); const data = await response.json();
     if (response.status === 429) { exhausted = true; throw new Error('本日の作成上限に達しました'); }
     if (!response.ok) throw new Error(data.message || data.error || 'request failed');
-    textStatus('OPを作成しています…'); poll(data.request_id, { client_id: data.client_id, client_secret: data.client_secret }, Date.now());
+    textStatus('OPを作成しています…'); poll(data.request_id, { client_id: data.client_id, client_secret: data.client_secret }, Date.now(), experimentalSummary);
   } catch (error) { textStatus('作成に失敗しました（' + error.message + '）'); setBusy(false); }
   await refreshQuota();
 });
@@ -370,6 +458,12 @@ document.querySelector('.feature[value="refresh-token"]').addEventListener('chan
   if (!event.target.checked) offline.checked = false;
   offline.disabled = !event.target.checked;
 });
+
+for (const toggle of document.querySelectorAll('.experimental-toggle-input')) {
+  toggle.addEventListener('change', () => {
+    for (const option of document.querySelectorAll('.experimental-option[data-feature="' + toggle.value + '"]')) option.disabled = !toggle.checked;
+  });
+}
 
 addUser(); refreshQuota();
 </script>
@@ -474,6 +568,32 @@ function invalid(message: string): ParseFailure {
   return { ok: false, message };
 }
 
+/**
+ * Experimental selections are validated against the catalog rather than passed through:
+ * an id or option the generator cannot wire must fail here, not halfway through CI.
+ * Declared options that are omitted fall back to their catalog default.
+ */
+function parseExperimental(value: unknown): { ok: true; value: ExperimentalSelection } | ParseFailure {
+  if (value === undefined || value === null) return { ok: true, value: {} };
+  if (typeof value !== "object" || Array.isArray(value)) return invalid("experimental must be an object");
+  const selection: ExperimentalSelection = {};
+  for (const [id, rawOptions] of Object.entries(value as Record<string, unknown>)) {
+    const feature = EXPERIMENTAL_FEATURES.find((item) => item.id === id);
+    if (!feature) return invalid(`experimental feature ${JSON.stringify(id)} is not supported`);
+    if (!rawOptions || typeof rawOptions !== "object" || Array.isArray(rawOptions)) return invalid(`experimental feature ${JSON.stringify(id)} options must be an object`);
+    const declared = feature.options ?? [];
+    const options: Record<string, boolean> = {};
+    for (const [optionId, optionValue] of Object.entries(rawOptions as Record<string, unknown>)) {
+      if (!declared.some((item) => item.id === optionId)) return invalid(`experimental option ${JSON.stringify(`${id}.${optionId}`)} is not supported`);
+      if (typeof optionValue !== "boolean") return invalid(`experimental option ${JSON.stringify(`${id}.${optionId}`)} must be true or false`);
+      options[optionId] = optionValue;
+    }
+    for (const option of declared) if (!(option.id in options)) options[option.id] = option.default === true;
+    selection[id] = options;
+  }
+  return { ok: true, value: selection };
+}
+
 function parseInput(value: unknown): ParseResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) return invalid("request body must be a JSON object");
   const body = value as Record<string, unknown>;
@@ -496,6 +616,8 @@ function parseInput(value: unknown): ParseResult {
   const missingFeature = FEATURE_NAMES.find((key) => typeof rawFeatures[key] !== "boolean");
   if (missingFeature !== undefined) return invalid(`feature ${JSON.stringify(missingFeature)} must be true or false`);
   if (body.scopes.includes("offline_access") && rawFeatures["refresh-token"] !== true) return invalid("the offline_access scope requires the refresh-token feature");
+  const experimental = parseExperimental(body.experimental);
+  if (!experimental.ok) return experimental;
   if (!Array.isArray(body.users) || body.users.length < 1 || body.users.length > 5) return invalid("users must contain between 1 and 5 accounts");
   const usernames = new Set<string>();
   const parsedUsers: PortalUser[] = [];
@@ -511,7 +633,7 @@ function parseInput(value: unknown): ParseResult {
     if (typeof password !== "string" || password.length < 8 || password.length > 128) return invalid(`${position} password must be between 8 and 128 characters`);
     usernames.add(username); parsedUsers.push({ username, password });
   }
-  return { ok: true, value: { name, redirectUrl, clientType, scopes: body.scopes as string[], features: rawFeatures as Record<FeatureName, boolean>, users: parsedUsers } };
+  return { ok: true, value: { name, redirectUrl, clientType, scopes: body.scopes as string[], features: rawFeatures as Record<FeatureName, boolean>, experimental: experimental.value, users: parsedUsers } };
 }
 
 function validateInput(value: unknown): CreateInput | null {
@@ -599,6 +721,7 @@ async function handleCreate(request: Request, env: Env): Promise<Response> {
     client_secret: clientSecret,
     scopes: input.scopes,
     features: input.features,
+    experimental: input.experimental,
   };
   const hashedUsers = await Promise.all(input.users.map(async (user) => ({ username: user.username, ...(await hashPassword(user.password)) })));
   const statements = [

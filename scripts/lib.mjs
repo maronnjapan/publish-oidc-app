@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -33,6 +33,33 @@ export async function readInfra() {
     }
   }
   return infra;
+}
+
+export const EXPERIMENTAL_CATALOG_PATH = path.join(ROOT, "experimental-features.json");
+
+/** Single source of truth for @maronn-oidc/experimental features (see docs/experimental.md). */
+export async function readExperimentalCatalog() {
+  let catalog;
+  try {
+    catalog = JSON.parse(await readFile(EXPERIMENTAL_CATALOG_PATH, "utf8"));
+  } catch (error) {
+    throw new Error(`unable to read experimental-features.json: ${error.message}`);
+  }
+  if (!Array.isArray(catalog?.features)) throw new Error("experimental-features.json must contain a features array");
+  for (const feature of catalog.features) {
+    if (typeof feature?.id !== "string" || !/^[a-z][a-z0-9-]{0,30}$/.test(feature.id)) {
+      throw new Error("every experimental feature needs a lowercase id");
+    }
+    if (feature.status !== "supported" && feature.status !== "detected") {
+      throw new Error(`experimental feature ${feature.id} must be status supported or detected`);
+    }
+  }
+  return catalog;
+}
+
+/** Features that are wired into the generator, i.e. the ones the portal may offer. */
+export function supportedExperimentalFeatures(catalog) {
+  return catalog.features.filter((feature) => feature.status === "supported");
 }
 
 function describeErrors(payload, status) {
@@ -82,7 +109,35 @@ export function getD1Rows(result) {
   return Array.isArray(result?.results) ? result.results : [];
 }
 
+const EXPERIMENTAL_PACKAGE_SEGMENT = /[\\/]@maronn-oidc[\\/]experimental[\\/]/;
+
+/**
+ * @maronn-oidc/experimental imports client-authentication helpers that the pinned
+ * @maronn-oidc/core does not export yet, so bundling it fails outright. When the OP
+ * being bundled carries the experimental overlay, redirect only the imports made from
+ * inside that package to the overlay's core-compat module, which re-exports the real
+ * core plus the missing helpers. Every other importer keeps resolving core normally,
+ * so there is still a single core instance for the package's instanceof checks.
+ */
+async function coreCompatPlugin(entryPoint) {
+  const compatPath = path.resolve(path.dirname(entryPoint), "oidc-provider", "experimental", "core-compat.ts");
+  try {
+    await access(compatPath);
+  } catch {
+    return undefined;
+  }
+  return {
+    name: "maronn-oidc-core-compat",
+    setup(build) {
+      build.onResolve({ filter: /^@maronn-oidc\/core$/ }, (args) =>
+        EXPERIMENTAL_PACKAGE_SEGMENT.test(args.importer) ? { path: compatPath } : null);
+    },
+  };
+}
+
 export async function bundle(entryPoint, options = {}) {
+  const compat = await coreCompatPlugin(entryPoint);
+  const { plugins = [], ...rest } = options;
   const output = await build({
     entryPoints: [entryPoint],
     bundle: true,
@@ -92,7 +147,8 @@ export async function bundle(entryPoint, options = {}) {
     conditions: ["workerd"],
     target: "es2022",
     legalComments: "none",
-    ...options,
+    ...rest,
+    plugins: compat ? [compat, ...plugins] : plugins,
   });
   if (!output.outputFiles[0]) throw new Error(`esbuild produced no output for ${entryPoint}`);
   return output.outputFiles[0].text;

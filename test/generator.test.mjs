@@ -38,6 +38,16 @@ test("Cloudflare overlay has no in-memory fallback and enforces selected scopes"
   assert.match(discovery, /allowedScopes/);
 });
 
+test("an OP without experimental features never references @maronn-oidc/experimental", async () => {
+  const index = await readFile(path.join(generated.appDirectory, "src/index.ts"), "utf8");
+  const authorize = await readFile(path.join(generated.appDirectory, "src/oidc-provider/routes/authorize.ts"), "utf8");
+  assert.match(index, /EXPERIMENTAL_IMPORT_PLACEHOLDER/, "placeholders stay untouched when nothing is selected");
+  assert.doesNotMatch(authorize, /experimental/);
+  assert.deepEqual(JSON.parse(await readFile(path.join(generated.appDirectory, "op.json"), "utf8")).experimental, {});
+  const code = await bundle(generated.entryPoint, { absWorkingDir: generated.appDirectory });
+  assert.doesNotMatch(code, /urn:ietf:params:oauth:request_uri:/);
+});
+
 test("generated OP bundles for the Workers runtime", async () => {
   const code = await bundle(generated.entryPoint, { absWorkingDir: generated.appDirectory });
   assert.ok(code.length > 100_000);

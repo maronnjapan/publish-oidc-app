@@ -1,0 +1,91 @@
+name: check-package-updates
+
+# Weekly follow-up on @maronn-oidc/cli, @maronn-oidc/core and @maronn-oidc/experimental.
+# A version bump is applied on a branch and offered as a pull request; a newly published
+# experimental feature additionally needs the wiring described in docs/experimental.md,
+# so the run leaves a tracking issue for it.
+
+on:
+  schedule:
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: maronn-oidc-package-updates
+  cancel-in-progress: false
+
+env:
+  UPDATE_BRANCH: chore/maronn-oidc-package-updates
+
+jobs:
+  follow-upstream:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Check for upstream releases
+        id: check
+        run: node scripts/check-package-updates.mjs --report "$RUNNER_TEMP/report.md"
+
+      - name: Apply the new versions
+        if: steps.check.outputs.needs_attention == 'true'
+        run: node scripts/check-package-updates.mjs --apply --skip-cli-features
+
+      - name: Verify the updated pins
+        id: verify
+        if: steps.check.outputs.needs_attention == 'true'
+        continue-on-error: true
+        run: |
+          npm install --no-audit --no-fund
+          npm run check
+
+      - name: Open or update the pull request
+        if: steps.check.outputs.needs_attention == 'true'
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "no file changes to propose"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$UPDATE_BRANCH"
+          git add -A
+          git commit -m "chore: follow the latest @maronn-oidc packages"
+          git push --force-with-lease -u origin "$UPDATE_BRANCH"
+          {
+            cat "$RUNNER_TEMP/report.md"
+            echo
+            echo "### 検証結果"
+            echo "\`npm run check\`: ${{ steps.verify.outcome }}"
+          } > "$RUNNER_TEMP/pr-body.md"
+          if [ -z "$(gh pr list --head "$UPDATE_BRANCH" --state open --json number --jq '.[].number')" ]; then
+            gh pr create --base "${{ github.event.repository.default_branch }}" --head "$UPDATE_BRANCH" \
+              --title "chore: @maronn-oidc パッケージの追従" --body-file "$RUNNER_TEMP/pr-body.md"
+          else
+            gh pr comment --body-file "$RUNNER_TEMP/pr-body.md" "$UPDATE_BRANCH"
+          fi
+
+      - name: Track experimental features that still need wiring
+        if: steps.check.outputs.has_catalog_work == 'true'
+        run: |
+          set -euo pipefail
+          title="@maronn-oidc/experimental の新機能を配線する"
+          existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$RUNNER_TEMP/report.md"
+          else
+            gh issue create --title "$title" --body-file "$RUNNER_TEMP/report.md"
+          fi

@@ -8,6 +8,12 @@ import type {
   TokenClientInfo,
   UserClaims,
 } from '@maronn-oidc/core';
+// Type-only: erased at build time, so an OP without the `par` experimental feature
+// never pulls @maronn-oidc/experimental into its bundle.
+import type {
+  PushedAuthorizationRecord,
+  PushedAuthorizationRequestStore,
+} from '@maronn-oidc/experimental/par';
 import { parseSessionId } from './store.js';
 
 export interface RuntimeClient extends ClientInfo, TokenClientInfo {
@@ -15,6 +21,13 @@ export interface RuntimeClient extends ClientInfo, TokenClientInfo {
 }
 
 interface RecordRow { value_json: string; expires_at: number | null }
+interface StoredPushedAuthorizationRequest {
+  requestUri: string;
+  clientId: string;
+  params: Record<string, string>;
+  createdAt: string;
+  expiresAt: string;
+}
 interface UserRow {
   username: string;
   password_hash: string;
@@ -127,6 +140,34 @@ export function createD1Runtime(db: D1Database, opId: string, client: RuntimeCli
     async delete(sessionId: string): Promise<void> { await records.delete('browser_session', sessionId); },
   };
 
+  // Experimental (RFC 9126). Stored in oidc_records like every other OP record, so the
+  // reaper's op_id sweep and the per-record TTL apply unchanged. consume() deletes the
+  // record before returning it: a request_uri is single-use.
+  const pushedAuthorizationRequestStore: PushedAuthorizationRequestStore = {
+    async save(record: PushedAuthorizationRecord): Promise<void> {
+      const stored: StoredPushedAuthorizationRequest = {
+        requestUri: record.requestUri,
+        clientId: record.clientId,
+        params: record.params,
+        createdAt: record.createdAt.toISOString(),
+        expiresAt: record.expiresAt.toISOString(),
+      };
+      await records.put('par_request', record.requestUri, stored, record.expiresAt.getTime());
+    },
+    async consume(requestUri: string): Promise<PushedAuthorizationRecord | null> {
+      const stored = await records.get<StoredPushedAuthorizationRequest>('par_request', requestUri);
+      if (!stored) return null;
+      await records.delete('par_request', requestUri);
+      return {
+        requestUri: stored.requestUri,
+        clientId: stored.clientId,
+        params: stored.params,
+        createdAt: new Date(stored.createdAt),
+        expiresAt: new Date(stored.expiresAt),
+      };
+    },
+  };
+
   const authorizationCodeResolver = {
     async findAuthorizationCode(code: string): Promise<AuthorizationCodeInfo | null> { return (await authCodeStore.get(code)) ?? null; },
     async revokeAuthorizationCode(code: string): Promise<void> { await authCodeStore.consume(code); },
@@ -214,5 +255,6 @@ export function createD1Runtime(db: D1Database, opId: string, client: RuntimeCli
     accessTokenResolver, refreshTokenResolver, clientResolver, authenticateUser,
     userClaimsResolver, sessionResolver, consentResolver,
     introspectionAccessTokenResolver, introspectionRefreshTokenResolver, revocationResolvers,
+    pushedAuthorizationRequestStore,
   };
 }

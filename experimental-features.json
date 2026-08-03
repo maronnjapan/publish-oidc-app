@@ -1,0 +1,24 @@
+{
+  "package": "@maronn-oidc/experimental",
+  "note": "@maronn-oidc/experimental の機能カタログ。ポータルUI・生成スクリプト・追従チェックが共通で参照する単一の情報源です。status が supported の機能だけがポータルUIに表示され、生成OPへ配線されます。scripts/check-package-updates.mjs が新しいsubpath exportを見つけると status: detected として追記します（配線手順は docs/experimental.md）。",
+  "features": [
+    {
+      "id": "par",
+      "status": "supported",
+      "subpath": "@maronn-oidc/experimental/par",
+      "label": "PAR（Pushed Authorization Requests）",
+      "spec": "RFC 9126",
+      "summary": "認可リクエストをバックチャネルで事前POSTし、返却された request_uri を /authorize に渡します。パラメータがブラウザのURLに載らず、改ざんもできません。",
+      "endpoints": ["POST /par"],
+      "discovery": ["pushed_authorization_request_endpoint", "require_pushed_authorization_requests"],
+      "options": [
+        {
+          "id": "required",
+          "label": "PARを必須にする",
+          "default": false,
+          "hint": "有効にすると request_uri のない /authorize を invalid_request で拒否します（require_pushed_authorization_requests=true）。"
+        }
+      ]
+    }
+  ]
+}

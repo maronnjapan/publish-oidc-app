@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths:
       - "system/**"
+      # The portal renders its experimental section from this catalog at build time.
+      - "experimental-features.json"
       - "scripts/deploy-portal.mjs"
       - "scripts/deploy-reaper.mjs"
       - "scripts/setup.mjs"
