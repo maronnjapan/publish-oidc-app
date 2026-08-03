@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { generateOp } from "../scripts/generate-op.mjs";
+import { EXPERIMENTAL_WIRING, generateOp, parseExperimentalSelection } from "../scripts/generate-op.mjs";
 import { bundle, readExperimentalCatalog, supportedExperimentalFeatures } from "../scripts/lib.mjs";
 
 function base64Url(value) { return Buffer.from(value).toString("base64url"); }
@@ -22,6 +22,16 @@ class FlowDatabase {
       bind(...params) {
         return {
           async first() {
+            // D1 applies DELETE ... RETURNING as a single statement, so model the
+            // removal and the read together — that is what makes a request_uri
+            // single-use under concurrent authorization requests.
+            if (sql.startsWith("DELETE FROM oidc_records") && sql.includes("RETURNING")) {
+              const key = `${params[0]}|${params[1]}|${params[2]}`;
+              const row = database.records.get(key) ?? null;
+              database.records.delete(key);
+              await Promise.resolve();
+              return row;
+            }
             if (sql.includes("FROM oidc_records")) return database.records.get(`${params[0]}|${params[1]}|${params[2]}`) ?? null;
             if (sql.includes("password_hash") && sql.includes("FROM oidc_users")) return database.users.get(`${params[0]}|${params[1]}`) ?? null;
             if (sql.includes("SELECT claims_json FROM oidc_users")) {
@@ -79,13 +89,19 @@ const config = {
 };
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), "oidc-par-test-"));
-const configPath = path.join(temporary, "config.json");
-await writeFile(configPath, JSON.stringify(config));
-const generated = await generateOp(opId, configPath);
-const workerCode = await bundle(generated.entryPoint, { absWorkingDir: generated.appDirectory });
-const workerPath = path.join(temporary, "worker.mjs");
-await writeFile(workerPath, workerCode);
-const worker = await import(`${pathToFileURL(workerPath).href}?${Date.now()}`);
+
+/** The experimental selection is baked into the generated code, so each mode is its own OP. */
+async function buildWorker(id, experimental) {
+  const configPath = path.join(temporary, `${id}.json`);
+  await writeFile(configPath, JSON.stringify({ ...config, op_id: id, experimental }));
+  const generated = await generateOp(id, configPath);
+  const workerPath = path.join(temporary, `${id}.mjs`);
+  await writeFile(workerPath, await bundle(generated.entryPoint, { absWorkingDir: generated.appDirectory }));
+  return { generated, worker: await import(`${pathToFileURL(workerPath).href}?${Date.now()}`) };
+}
+
+const { generated, worker } = await buildWorker(opId, config.experimental);
+const optional = await buildWorker("maronn-op-paropt12345", { par: {} });
 
 const issuer = "https://maronn-op-par1234567.example.workers.dev";
 const keyPair = await webcrypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
@@ -98,14 +114,13 @@ function createEnvironment() {
     OP_ID: opId,
     OP_ISSUER: issuer,
     ALLOWED_SCOPES: JSON.stringify(config.scopes),
-    EXPERIMENTAL_FEATURES: JSON.stringify(generated.experimental),
     OIDC_SIGNING_JWK: JSON.stringify({ ...privateJwk, alg: "RS256", use: "sig", kid: "par-key" }),
     OIDC_CLIENT_CONFIG: JSON.stringify({ clientId: config.client_id, clientSecret: config.client_secret, redirectUris: [config.redirect_url], clientType: "confidential", offlineAccessAllowed: false, grantTypes: ["authorization_code", "refresh_token"], tokenEndpointAuthMethod: "client_secret_post" }),
   };
 }
 
 const context = { waitUntil() {}, passThroughOnException() {} };
-const fetchWith = (environment) => (request) => worker.default.fetch(request, environment, context);
+const fetchWith = (environment, target = worker) => (request) => target.default.fetch(request, environment, context);
 
 async function pushAuthorizationRequest(fetchWorker, overrides = {}) {
   const verifier = "a".repeat(64);
@@ -130,7 +145,34 @@ test("the experimental catalog only advertises features the generator can wire",
   const catalog = await readExperimentalCatalog();
   const supported = supportedExperimentalFeatures(catalog);
   assert.ok(supported.some((feature) => feature.id === "par"));
-  for (const feature of supported) assert.match(feature.subpath, /^@maronn-oidc\/experimental\//);
+  for (const feature of supported) {
+    assert.match(feature.subpath, /^@maronn-oidc\/experimental\//);
+    // The portal offers whatever is `supported`. Without matching wiring the request
+    // would pass validation, burn the caller's daily quota, and only then fail in CI.
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(EXPERIMENTAL_WIRING, feature.id),
+      `experimental feature ${feature.id} is marked supported but has no EXPERIMENTAL_WIRING entry (docs/experimental.md)`,
+    );
+  }
+});
+
+test("experimental option defaults are applied consistently by the generator", async () => {
+  const catalog = await readExperimentalCatalog();
+  assert.deepEqual(parseExperimentalSelection({ par: {} }, catalog), { par: { required: false } });
+  assert.deepEqual(parseExperimentalSelection({ par: null }, catalog), { par: { required: false } });
+  assert.deepEqual(parseExperimentalSelection({ par: { required: true } }, catalog), { par: { required: true } });
+  assert.deepEqual(parseExperimentalSelection(undefined, catalog), {});
+  assert.throws(() => parseExperimentalSelection({ dpop: {} }, catalog), /is not supported/);
+  assert.throws(() => parseExperimentalSelection({ par: { nope: true } }, catalog), /is not supported/);
+});
+
+test("the core-compat shim is still needed by the pinned core", async () => {
+  // Fails the moment @maronn-oidc/core publishes these, which is the signal to delete
+  // templates/cloudflare/experimental/core-compat.ts and the resolver in scripts/lib.mjs.
+  const coreTypes = await readFile("node_modules/@maronn-oidc/core/dist/index.d.ts", "utf8");
+  const published = ["extractClientCredentials", "resolveAuthenticatedTokenClient", "validateClientAuthMethod", "verifyClientSecret"]
+    .filter((name) => coreTypes.includes(name));
+  assert.notEqual(published.length, 4, `@maronn-oidc/core now exports ${published.join(", ")} — retire the core-compat shim (docs/experimental.md)`);
 });
 
 test("discovery advertises the pushed authorization request endpoint", async () => {
@@ -229,8 +271,7 @@ test("the pushed endpoint authenticates the client and enforces the selected sco
 });
 
 test("optional mode still accepts a plain authorization request", async () => {
-  const environment = { ...createEnvironment(), EXPERIMENTAL_FEATURES: JSON.stringify({ par: { required: false } }) };
-  const fetchWorker = fetchWith(environment);
+  const fetchWorker = fetchWith(createEnvironment(), optional.worker);
 
   const discovery = await (await fetchWorker(new Request(`${issuer}/.well-known/openid-configuration`))).json();
   assert.equal(discovery.require_pushed_authorization_requests, false);
@@ -246,6 +287,46 @@ test("the pushed endpoint answers CORS preflight for browser clients", async () 
   const response = await fetchWith(createEnvironment())(new Request(`${issuer}/par`, { method: "OPTIONS", headers: { origin: "https://client.example", "access-control-request-method": "POST" } }));
   assert.ok(response.status === 204 || response.status === 200, `unexpected preflight status ${response.status}`);
   assert.equal(response.headers.get("access-control-allow-origin"), "*");
+});
+
+test("concurrent authorization requests cannot both consume one request_uri", async () => {
+  const fetchWorker = fetchWith(createEnvironment());
+  const { response: pushed } = await pushAuthorizationRequest(fetchWorker);
+  const { request_uri: requestUri } = await pushed.json();
+  const authorizeUrl = new URL(`${issuer}/authorize`);
+  authorizeUrl.searchParams.set("client_id", config.client_id);
+  authorizeUrl.searchParams.set("request_uri", requestUri);
+
+  const responses = await Promise.all([fetchWorker(new Request(authorizeUrl)), fetchWorker(new Request(authorizeUrl))]);
+  const statuses = responses.map((response) => response.status).sort();
+  assert.deepEqual(statuses, [302, 400], "exactly one of the racing requests may consume the pushed request");
+});
+
+test("the pushed request endpoint authenticates before it reveals anything about scopes", async () => {
+  const fetchWorker = fetchWith(createEnvironment());
+  const body = new URLSearchParams({ response_type: "code", client_id: "client_unknown123456", redirect_uri: config.redirect_url, scope: "openid admin" });
+  const response = await fetchWorker(new Request(`${issuer}/par`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body }));
+  assert.equal(response.status, 401);
+  assert.equal((await response.json()).error, "invalid_client");
+});
+
+test("a store failure at the authorization endpoint returns an OAuth error object", async () => {
+  const environment = createEnvironment();
+  const fetchWorker = fetchWith(environment);
+  const { response: pushed } = await pushAuthorizationRequest(fetchWorker);
+  const { request_uri: requestUri } = await pushed.json();
+  const workingPrepare = environment.DB.prepare.bind(environment.DB);
+  environment.DB.prepare = (sql) => {
+    if (sql.startsWith("DELETE FROM oidc_records") && sql.includes("RETURNING")) throw new Error("D1 is unavailable");
+    return workingPrepare(sql);
+  };
+  const authorizeUrl = new URL(`${issuer}/authorize`);
+  authorizeUrl.searchParams.set("client_id", config.client_id);
+  authorizeUrl.searchParams.set("request_uri", requestUri);
+  const response = await fetchWorker(new Request(authorizeUrl));
+  assert.equal(response.status, 500);
+  assert.match(response.headers.get("content-type"), /application\/json/);
+  assert.equal((await response.json()).error, "server_error");
 });
 
 test("a request_uri cannot be replayed by a different client id", async () => {

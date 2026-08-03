@@ -13,9 +13,9 @@
 // package relies on keep working.
 //
 // The fallbacks below are a split of core@0.0.1's own authenticateClient(), so the
-// authentication rules are identical to the token endpoint's. Each name prefers the
-// real core export when it exists, so this shim retires itself automatically once core
-// publishes the helpers.
+// authentication rules are identical to the token endpoint's. Once core publishes all
+// four, the shim defers to them and CORE_COMPAT_SHIM_ACTIVE turns false — which is what
+// test/experimental-par.test.mjs watches so the retirement does not go unnoticed.
 import * as core from '@maronn-oidc/core';
 import { TokenError, TokenErrorCode, type TokenClientInfo, type TokenClientResolver } from '@maronn-oidc/core';
 
@@ -167,25 +167,32 @@ async function fallbackVerifyClientSecret(
   }
 }
 
-export const extractClientCredentials =
-  (upstream.extractClientCredentials as typeof fallbackExtractClientCredentials | undefined) ??
-  fallbackExtractClientCredentials;
-
-export const resolveAuthenticatedTokenClient =
-  (upstream.resolveAuthenticatedTokenClient as typeof fallbackResolveAuthenticatedTokenClient | undefined) ??
-  fallbackResolveAuthenticatedTokenClient;
-
-export const validateClientAuthMethod =
-  (upstream.validateClientAuthMethod as typeof fallbackValidateClientAuthMethod | undefined) ??
-  fallbackValidateClientAuthMethod;
-
-export const verifyClientSecret =
-  (upstream.verifyClientSecret as typeof fallbackVerifyClientSecret | undefined) ??
-  fallbackVerifyClientSecret;
+// The four helpers hand each other an opaque "presented credentials" object, so mixing
+// core's implementations with the fallbacks would let one side read a field the other
+// never sets. Substitution is therefore all-or-nothing: the shim steps aside only once
+// core publishes the complete set.
+const upstreamHelpers = {
+  extractClientCredentials: upstream.extractClientCredentials,
+  resolveAuthenticatedTokenClient: upstream.resolveAuthenticatedTokenClient,
+  validateClientAuthMethod: upstream.validateClientAuthMethod,
+  verifyClientSecret: upstream.verifyClientSecret,
+};
 
 /** True when the pinned core still needs the fallbacks above. */
-export const CORE_COMPAT_SHIM_ACTIVE =
-  upstream.extractClientCredentials === undefined ||
-  upstream.resolveAuthenticatedTokenClient === undefined ||
-  upstream.validateClientAuthMethod === undefined ||
-  upstream.verifyClientSecret === undefined;
+export const CORE_COMPAT_SHIM_ACTIVE = Object.values(upstreamHelpers).some((helper) => typeof helper !== 'function');
+
+export const extractClientCredentials = CORE_COMPAT_SHIM_ACTIVE
+  ? fallbackExtractClientCredentials
+  : (upstreamHelpers.extractClientCredentials as typeof fallbackExtractClientCredentials);
+
+export const resolveAuthenticatedTokenClient = CORE_COMPAT_SHIM_ACTIVE
+  ? fallbackResolveAuthenticatedTokenClient
+  : (upstreamHelpers.resolveAuthenticatedTokenClient as typeof fallbackResolveAuthenticatedTokenClient);
+
+export const validateClientAuthMethod = CORE_COMPAT_SHIM_ACTIVE
+  ? fallbackValidateClientAuthMethod
+  : (upstreamHelpers.validateClientAuthMethod as typeof fallbackValidateClientAuthMethod);
+
+export const verifyClientSecret = CORE_COMPAT_SHIM_ACTIVE
+  ? fallbackVerifyClientSecret
+  : (upstreamHelpers.verifyClientSecret as typeof fallbackVerifyClientSecret);

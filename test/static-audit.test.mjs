@@ -45,17 +45,22 @@ test("system deployment installs the 24-hour reaper and its 15-minute cron", asy
   assert.match(deploy, /ensureRegistryOpsExpiry/);
 });
 
-test("experimental features stay opt-in and are deployed as their own binding", async () => {
+test("experimental features stay opt-in and are baked into the generated OP", async () => {
   const template = await readFile("templates/cloudflare/index.ts", "utf8");
   const deploy = await readFile("scripts/deploy-op.mjs", "utf8");
   const persistence = await readFile("templates/cloudflare/persistence.ts", "utf8");
   for (const marker of ["EXPERIMENTAL_IMPORT_PLACEHOLDER", "EXPERIMENTAL_RUNTIME_PLACEHOLDER", "EXPERIMENTAL_CONTEXT_PLACEHOLDER", "EXPERIMENTAL_ROUTE_PLACEHOLDER"]) {
     assert.match(template, new RegExp(marker));
   }
-  assert.match(deploy, /name: "EXPERIMENTAL_FEATURES"/);
+  // The selection is generated into the code, never carried by an editable Worker
+  // variable, so options like PAR's `required` cannot be downgraded after deployment.
+  assert.match(template, /const EXPERIMENTAL_FEATURES: Record<string, Record<string, unknown>> = \{\};/);
+  assert.doesNotMatch(deploy, /EXPERIMENTAL_FEATURES/);
   // Type-only, so an OP without an experimental feature never bundles the package.
   assert.match(persistence, /import type \{[\s\S]*?\} from '@maronn-oidc\/experimental\/par';/);
   assert.match(persistence, /'par_request'/);
+  // Single-use consumption has to be one statement, not a read followed by a delete.
+  assert.match(persistence, /DELETE FROM oidc_records WHERE op_id = \?1 AND kind = \?2 AND record_key = \?3 RETURNING/);
 });
 
 test("weekly package follow-up proposes updates and tracks unwired features", async () => {

@@ -14,10 +14,13 @@
 
 - `POST /par` が生えます。クライアント認証（public: `none` / confidential: `client_secret_post`）を通したうえで認可リクエストを受け取り、`request_uri` と `expires_in`（既定90秒）を201で返します。
 - `/authorize` は `request_uri` を先に解決し、pushされたパラメータだけを検証します。クエリに載せた他のパラメータは無視されます。
-- `request_uri` は使い捨てです。2回目は `invalid_request_uri` になります。発行元と異なる `client_id` からの提示も同じく拒否します。
-- Discoveryに `pushed_authorization_request_endpoint` と `require_pushed_authorization_requests` が追加されます。
+- `request_uri` は使い捨てです。2回目は `invalid_request_uri` になります。発行元と異なる `client_id` からの提示も同じく拒否します。取り出しは `DELETE ... RETURNING` の1文で行うため、同じ `request_uri` を同時に2本投げても片方しか通りません。
+- Discoveryに `pushed_authorization_request_endpoint` と `require_pushed_authorization_requests` が追加されます。`request_uri_parameter_supported` は `false` のままです。これはOIDC Core 1.0 §6.2 のRequest Object by referenceを指す項目で、RFC 9126 §5 が「PARで得た `request_uri` は他のメタデータに関係なく認可エンドポイントで使える」と明記しているため、PARのために書き換えてはいけません。
 - 「PARを必須にする」を選ぶと、`request_uri` のない `/authorize` を `invalid_request` で拒否します。
-- pushされたリクエストは共有D1の `oidc_records`（`kind = 'par_request'`）へ `op_id` 単位で保存され、24時間後のReaper回収対象に含まれます。
+- pushされたリクエストは共有D1の `oidc_records`（`kind = 'par_request'`）へ `op_id` 単位で保存され、24時間後のReaper回収対象に含まれます。クライアント認証情報は保存されません。
+- スコープ検証はクライアント認証の後に行います（RFC 9126 §2.1）。未認証の呼び出しは `invalid_client` で返り、許可スコープの一覧が漏れません。
+
+選択内容は生成時に `src/index.ts` の `EXPERIMENTAL_FEATURES` へ直接埋め込みます。Worker変数として渡すと、あとから消えたり書き換わったりしたときに「PAR必須」のような設定が黙って緩む（fail open）ためです。
 
 ## coreとの互換性について（重要）
 
@@ -56,8 +59,8 @@ npm run check             # 更新後に必ず実行
 
 1. **APIを確認する。** `npm pack @maronn-oidc/experimental@<version>` を展開し、`dist/<feature>/index.d.ts` でエントリポイントと必要なstore/resolverの形を読む。coreに無いexportをimportしていないかも確認する（あれば `core-compat.ts` へ追加）。
 2. **オーバーレイを書く。** `templates/cloudflare/experimental/<feature>.ts` に、Honoルート・contextから読む runtime・Discoveryメタデータを実装する。永続化が必要なら `templates/cloudflare/persistence.ts` の `createD1Runtime` にstoreを足す（`oidc_records` の `kind` を新設すれば、Reaperの `op_id` 単位削除にそのまま乗ります）。
-3. **生成側に登録する。** `scripts/generate-op.mjs` の `EXPERIMENTAL_WIRING` へ `import` / `runtime` / `context` / `route` の各スニペットとコピー対象ファイルを追加する。生成コードへのパッチが必要なら `applyExperimentalWiring` に `replaceOnce` を足す（マーカーが消えたら例外で落ちるので、CLI更新時の破損に気付けます）。
-4. **カタログを仕上げる。** `experimental-features.json` の当該エントリを `status: "supported"` にし、`label` / `spec` / `summary` / `endpoints` / `options` を埋める。ポータルUIはこのカタログから生成されるので、UIコードの変更は不要です。
+3. **生成側に登録する。** `scripts/generate-op.mjs` の `EXPERIMENTAL_WIRING` へ `import` / `runtime` / `context` / `route` の各スニペットとコピー対象ファイルを追加する。生成コードへのパッチが必要なら `applyExperimentalWiring` に `replaceOnce` を足す（マーカーが消えたら例外で落ちるので、CLI更新時の破損に気付けます）。設定値は `EXPERIMENTAL_FEATURES.<feature-id>` から読むこと（Worker変数からは読まない）。Discoveryへ項目を足す場合は、`context` スニペットで `experimentalDiscoveryMetadata` を**マージ**すること。代入すると同時に選ばれた他機能のメタデータを消してしまいます。
+4. **カタログを仕上げる。** `experimental-features.json` の当該エントリを `status: "supported"` にし、`label` / `spec` / `summary` / `endpoints` / `options` を埋める。ポータルUIはこのカタログから生成されるので、UIコードの変更は不要です。**手順3より先に `supported` にしないこと**（ポータルは `supported` を無条件に出すため、配線が無いとユーザーの作成枠を消費したうえでCIで失敗します）。`test/experimental-par.test.mjs` がこの対応関係を検査します。
 5. **テストを足す。** `test/experimental-par.test.mjs` に倣い、生成→バンドル→リクエストまで通すテストを書く。
 6. `npm run check` を通してからコミットする。
 

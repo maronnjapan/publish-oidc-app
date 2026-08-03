@@ -11,6 +11,11 @@ test("version comparison orders releases above their prereleases", () => {
   assert.ok(compareVersions("0.0.1", "0.0.2") < 0);
   assert.ok(compareVersions("1.0.0", "1.0.0-rc.1") > 0);
   assert.ok(compareVersions("1.0.0-rc.1", "1.0.0-rc.2") < 0);
+  // semver §11: numeric identifiers compare numerically, so rc.10 is newer than rc.9.
+  assert.ok(compareVersions("0.1.0-rc.10", "0.1.0-rc.9") > 0);
+  assert.ok(compareVersions("1.0.0-beta.2", "1.0.0-beta.10") < 0);
+  assert.ok(compareVersions("1.0.0-alpha", "1.0.0-alpha.1") < 0);
+  assert.ok(compareVersions("1.0.0-alpha.1", "1.0.0-1") > 0);
 });
 
 test("experimental feature ids come from the published subpath exports", () => {
@@ -26,6 +31,8 @@ test("experimental feature ids come from the published subpath exports", () => {
   assert.deepEqual(result.ids, ["par", "dpop"]);
   assert.deepEqual(result.unsupportedSubpaths, ["./Not_An_Id"]);
   assert.deepEqual(experimentalFeatureIds({}).ids, []);
+  // A root-only exports map keys on conditions, not subpaths; none of them are features.
+  assert.deepEqual(experimentalFeatureIds({ exports: { types: "./dist/index.d.ts", import: "./dist/index.js", require: "./dist/index.cjs" } }).ids, []);
 });
 
 test("the report calls out new, removed, and unwired experimental features", () => {

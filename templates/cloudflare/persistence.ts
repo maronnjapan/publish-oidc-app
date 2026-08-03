@@ -90,6 +90,19 @@ class Records {
     await this.db.prepare(`DELETE FROM oidc_records WHERE op_id = ?1 AND kind = ?2 AND record_key = ?3`).bind(this.opId, kind, recordKey).run();
   }
 
+  /**
+   * Single-use read. A separate get + delete would let two concurrent requests both
+   * observe the row before either DELETE lands, so the removal and the read have to be
+   * the same statement.
+   */
+  async take<T>(kind: string, key: string): Promise<T | null> {
+    const recordKey = await opaqueKey(key);
+    const row = await this.db.prepare(`DELETE FROM oidc_records WHERE op_id = ?1 AND kind = ?2 AND record_key = ?3 RETURNING value_json, expires_at`).bind(this.opId, kind, recordKey).first<RecordRow>();
+    if (!row) return null;
+    if (row.expires_at !== null && row.expires_at <= Date.now()) return null;
+    return safeParse<T>(row.value_json);
+  }
+
   async deleteByGrant(kind: string, grantId: string): Promise<void> {
     await this.db.prepare(`DELETE FROM oidc_records WHERE op_id = ?1 AND kind = ?2 AND json_extract(value_json, '$.grantId') = ?3`).bind(this.opId, kind, grantId).run();
   }
@@ -141,8 +154,9 @@ export function createD1Runtime(db: D1Database, opId: string, client: RuntimeCli
   };
 
   // Experimental (RFC 9126). Stored in oidc_records like every other OP record, so the
-  // reaper's op_id sweep and the per-record TTL apply unchanged. consume() deletes the
-  // record before returning it: a request_uri is single-use.
+  // reaper's op_id sweep and the per-record TTL apply unchanged. consume() removes and
+  // reads in one statement, so a request_uri stays single-use even under concurrent
+  // authorization requests.
   const pushedAuthorizationRequestStore: PushedAuthorizationRequestStore = {
     async save(record: PushedAuthorizationRecord): Promise<void> {
       const stored: StoredPushedAuthorizationRequest = {
@@ -155,9 +169,8 @@ export function createD1Runtime(db: D1Database, opId: string, client: RuntimeCli
       await records.put('par_request', record.requestUri, stored, record.expiresAt.getTime());
     },
     async consume(requestUri: string): Promise<PushedAuthorizationRecord | null> {
-      const stored = await records.get<StoredPushedAuthorizationRequest>('par_request', requestUri);
+      const stored = await records.take<StoredPushedAuthorizationRequest>('par_request', requestUri);
       if (!stored) return null;
-      await records.delete('par_request', requestUri);
       return {
         requestUri: stored.requestUri,
         clientId: stored.clientId,

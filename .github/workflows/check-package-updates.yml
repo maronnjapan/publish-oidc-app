@@ -29,6 +29,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The update branch survives between runs, so --force-with-lease needs its
+          # remote-tracking ref; a shallow single-branch checkout would not have it.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22

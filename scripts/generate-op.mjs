@@ -32,11 +32,10 @@ export function parseExperimentalSelection(value, catalog) {
   for (const [id, rawOptions] of Object.entries(value)) {
     const feature = supported.get(id);
     if (!feature) throw new Error(`experimental feature ${JSON.stringify(id)} is not supported`);
-    if (rawOptions === undefined || rawOptions === null) { selection[id] = {}; continue; }
-    if (typeof rawOptions !== "object" || Array.isArray(rawOptions)) throw new Error(`experimental feature ${JSON.stringify(id)} options must be an object`);
+    if (rawOptions !== undefined && rawOptions !== null && (typeof rawOptions !== "object" || Array.isArray(rawOptions))) throw new Error(`experimental feature ${JSON.stringify(id)} options must be an object`);
     const declared = new Map((feature.options ?? []).map((option) => [option.id, option]));
     const options = {};
-    for (const [optionId, optionValue] of Object.entries(rawOptions)) {
+    for (const [optionId, optionValue] of Object.entries(rawOptions ?? {})) {
       const declaredOption = declared.get(optionId);
       if (!declaredOption) throw new Error(`experimental option ${JSON.stringify(`${id}.${optionId}`)} is not supported`);
       if (typeof optionValue !== "boolean") throw new Error(`experimental option ${JSON.stringify(`${id}.${optionId}`)} must be true or false`);
@@ -57,11 +56,18 @@ const EXPERIMENTAL_PLACEHOLDERS = {
   route: "  // <!-- EXPERIMENTAL_ROUTE_PLACEHOLDER -->",
 };
 
-const EXPERIMENTAL_WIRING = {
+const EXPERIMENTAL_CONFIG_LINE = "const EXPERIMENTAL_FEATURES: Record<string, Record<string, unknown>> = {};";
+
+/**
+ * Per-feature snippets injected into templates/cloudflare/index.ts. The `context` entry
+ * must merge into experimentalDiscoveryMetadata rather than assign it, so two selected
+ * features do not overwrite each other's discovery keys.
+ */
+export const EXPERIMENTAL_WIRING = {
   par: {
     import: "import { createParApp, createParRuntime, parDiscoveryMetadata, PAR_ENDPOINT_PATH } from './oidc-provider/experimental/par.js';",
-    runtime: "  const parRuntime = createParRuntime({ store: runtime.pushedAuthorizationRequestStore, clientResolver: runtime.clientResolver, allowedScopes: scopes, options: experimental.par });",
-    context: "    c.set('parRuntime', parRuntime);\n    c.set('experimentalDiscoveryMetadata', parDiscoveryMetadata(env.OP_ISSUER, parRuntime));",
+    runtime: "  const parRuntime = createParRuntime({ store: runtime.pushedAuthorizationRequestStore, clientResolver: runtime.clientResolver, allowedScopes: scopes, options: EXPERIMENTAL_FEATURES.par });",
+    context: "    c.set('parRuntime', parRuntime);\n    c.set('experimentalDiscoveryMetadata', { ...(c.get('experimentalDiscoveryMetadata') as Record<string, unknown> | undefined ?? {}), ...parDiscoveryMetadata(env.OP_ISSUER, parRuntime) });",
     route: "  app.route(PAR_ENDPOINT_PATH, createParApp());",
     files: ["par.ts"],
   },
@@ -73,10 +79,10 @@ function replaceOnce(source, marker, replacement, description) {
 }
 
 /** Wires the selected experimental features into the Cloudflare entrypoint. */
-async function applyExperimentalWiring(sourceDirectory, providerDirectory, featureIds) {
+async function applyExperimentalWiring(sourceDirectory, providerDirectory, experimental) {
   const sections = { import: [], runtime: [], context: [], route: [] };
   const files = new Set(["core-compat.ts"]);
-  for (const id of featureIds) {
+  for (const id of Object.keys(experimental)) {
     const wiring = EXPERIMENTAL_WIRING[id];
     if (!wiring) throw new Error(`experimental feature ${JSON.stringify(id)} has no generator wiring; see docs/experimental.md`);
     for (const key of ["import", "runtime", "context", "route"]) sections[key].push(wiring[key]);
@@ -94,6 +100,14 @@ async function applyExperimentalWiring(sourceDirectory, providerDirectory, featu
   for (const [key, marker] of Object.entries(EXPERIMENTAL_PLACEHOLDERS)) {
     index = replaceOnce(index, marker, sections[key].join("\n"), "Cloudflare entrypoint template");
   }
+  // Baked in rather than passed as a Worker binding: `required` and friends decide how
+  // strict the deployed OP is, and a binding can be edited or dropped after deployment.
+  index = replaceOnce(
+    index,
+    EXPERIMENTAL_CONFIG_LINE,
+    EXPERIMENTAL_CONFIG_LINE.replace("= {};", `= ${JSON.stringify(experimental)};`),
+    "Cloudflare entrypoint template",
+  );
   await writeFile(indexPath, index);
 
   const authorizePath = path.join(providerDirectory, "routes", "authorize.ts");
@@ -112,7 +126,7 @@ async function applyExperimentalWiring(sourceDirectory, providerDirectory, featu
       "  // at /par before validation, so only what the client pushed is honoured.",
       "  const pushedRequest = await resolvePushedAuthorizationParams(c.get('parRuntime'), rawParams);",
       "  if (!pushedRequest.ok) {",
-      "    return c.json({ error: pushedRequest.error, error_description: pushedRequest.errorDescription }, 400);",
+      "    return c.json({ error: pushedRequest.error, error_description: pushedRequest.errorDescription }, pushedRequest.status);",
       "  }",
       "  const params = pushedRequest.params as typeof rawParams;",
     ].join("\n"),
@@ -177,7 +191,7 @@ export async function generateOp(opId, configPath) {
   await cp(path.join(ROOT, "templates", "cloudflare", "persistence.ts"), path.join(providerDirectory, "persistence.ts"));
   await cp(path.join(ROOT, "templates", "cloudflare", "index.ts"), path.join(sourceDirectory, "index.ts"));
   await patchGeneratedSource(providerDirectory);
-  if (experimentalIds.length > 0) await applyExperimentalWiring(sourceDirectory, providerDirectory, experimentalIds);
+  if (experimentalIds.length > 0) await applyExperimentalWiring(sourceDirectory, providerDirectory, experimental);
 
   const metadata = {
     op_id: opId,

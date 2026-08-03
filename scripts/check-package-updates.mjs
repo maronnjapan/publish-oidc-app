@@ -39,6 +39,27 @@ function splitVersion(version) {
   return { numbers: [numbers[0] || 0, numbers[1] || 0, numbers[2] || 0], prerelease };
 }
 
+/** semver §11: numeric prerelease identifiers compare numerically, so rc.10 > rc.9. */
+function comparePrerelease(left, right) {
+  const a = left.split(".");
+  const b = right.split(".");
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    if (a[index] === undefined) return -1;
+    if (b[index] === undefined) return 1;
+    const aNumeric = /^\d+$/.test(a[index]);
+    const bNumeric = /^\d+$/.test(b[index]);
+    if (aNumeric && bNumeric) {
+      const difference = Number(a[index]) - Number(b[index]);
+      if (difference !== 0) return difference;
+    } else if (aNumeric !== bNumeric) {
+      return aNumeric ? -1 : 1;
+    } else if (a[index] !== b[index]) {
+      return a[index] < b[index] ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
 /** Returns > 0 when `left` is newer than `right`. Prereleases sort below their release. */
 export function compareVersions(left, right) {
   const a = splitVersion(left);
@@ -49,7 +70,7 @@ export function compareVersions(left, right) {
   if (a.prerelease === b.prerelease) return 0;
   if (!a.prerelease) return 1;
   if (!b.prerelease) return -1;
-  return a.prerelease < b.prerelease ? -1 : 1;
+  return comparePrerelease(a.prerelease, b.prerelease);
 }
 
 function pinnedVersion(specifier, name) {
@@ -86,8 +107,10 @@ export function experimentalFeatureIds(packageManifest) {
   const ids = [];
   const unsupportedSubpaths = [];
   for (const subpath of Object.keys(exportsMap)) {
-    if (subpath === "." || subpath === "./package.json") continue;
-    const id = subpath.replace(/^\.\//, "");
+    // A root-only exports map uses condition names ("types", "import") as its keys;
+    // only entries that are actually subpaths can be feature ids.
+    if (!subpath.startsWith("./") || subpath === "./package.json") continue;
+    const id = subpath.slice(2);
     if (FEATURE_ID_PATTERN.test(id)) ids.push(id);
     else unsupportedSubpaths.push(subpath);
   }

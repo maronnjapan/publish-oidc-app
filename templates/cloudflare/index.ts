@@ -9,10 +9,17 @@ interface Env {
   OP_ID: string;
   OP_ISSUER: string;
   ALLOWED_SCOPES: string;
-  EXPERIMENTAL_FEATURES?: string;
   OIDC_CLIENT_CONFIG: string;
   OIDC_SIGNING_JWK: string;
 }
+
+/**
+ * Enabled @maronn-oidc/experimental features, keyed by feature id (see
+ * experimental-features.json). Written by scripts/generate-op.mjs at generation time
+ * rather than read from a Worker variable: options such as PAR's `required` are security
+ * decisions, and a mutable binding could silently downgrade a deployed OP.
+ */
+const EXPERIMENTAL_FEATURES: Record<string, Record<string, unknown>> = {};
 
 type SigningJwk = JsonWebKey & { kid: string; n: string; e: string };
 
@@ -32,26 +39,11 @@ function signingKeyProvider(jwkText: string): SigningKeyProvider {
   };
 }
 
-/**
- * Enabled @maronn-oidc/experimental features, keyed by feature id (see
- * experimental-features.json). Absent or malformed means "no experimental feature".
- */
-function parseExperimentalFeatures(value: string | undefined): Record<string, Record<string, unknown>> {
-  if (!value) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
 function createWorkerApp(env: Env): Hono<{ Bindings: Env; Variables: Record<string, any> }> {
   const app = new Hono<{ Bindings: Env; Variables: Record<string, any> }>();
   const client = JSON.parse(env.OIDC_CLIENT_CONFIG) as RuntimeClient;
   const scopes = JSON.parse(env.ALLOWED_SCOPES) as string[];
   const runtime = createD1Runtime(env.DB, env.OP_ID, client);
-  const experimental = parseExperimentalFeatures(env.EXPERIMENTAL_FEATURES);
   // <!-- EXPERIMENTAL_RUNTIME_PLACEHOLDER -->
 
   app.use('*', async (c, next) => {
@@ -83,7 +75,7 @@ function createWorkerApp(env: Env): Hono<{ Bindings: Env; Variables: Record<stri
     client_id: client.clientId,
     client_type: client.clientType,
     scopes_supported: scopes,
-    experimental_features: Object.keys(experimental),
+    experimental_features: Object.keys(EXPERIMENTAL_FEATURES),
     discovery: env.OP_ISSUER + '/.well-known/openid-configuration',
   }));
   return app;

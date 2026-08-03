@@ -13,8 +13,12 @@ import {
   ParError,
   PushedRequestUriError,
   assertPushedRequestUsed,
-  handlePushedAuthorizationRequest,
+  authenticateParClient,
+  buildPushedAuthorizationResponse,
+  createPushedAuthorizationRecord,
+  rejectForbiddenParParams,
   resolvePushedRequestUri,
+  validatePushedAuthorizationParams,
   type PushedAuthorizationRequestStore,
 } from '@maronn-oidc/experimental/par';
 import { sanitizeErrorDescription, type ClientResolver, type TokenClientResolver } from '@maronn-oidc/core';
@@ -70,12 +74,15 @@ export function parDiscoveryMetadata(issuer: string, runtime: ParRuntime | undef
 
 export type PushedParamsResolution =
   | { ok: true; params: Record<string, string> }
-  | { ok: false; error: string; errorDescription: string };
+  | { ok: false; status: 400 | 500; error: string; errorDescription: string };
 
 /**
  * Swaps a pushed request_uri for the parameters stored at /par (RFC 9126 §4), so the
  * authorization endpoint validates exactly what the client pushed and ignores anything
  * else on the query string. Returns the request untouched when PAR is not in play.
+ *
+ * Never throws: this runs ahead of the generated handler's own try/catch, so a store
+ * outage has to come back as an OAuth error object rather than an unhandled exception.
  */
 export async function resolvePushedAuthorizationParams(
   runtime: ParRuntime | undefined,
@@ -89,9 +96,10 @@ export async function resolvePushedAuthorizationParams(
     return { ok: true, params };
   } catch (error) {
     if (error instanceof PushedRequestUriError) {
-      return { ok: false, error: error.code, errorDescription: error.errorDescription };
+      return { ok: false, status: 400, error: error.code, errorDescription: error.errorDescription };
     }
-    throw error;
+    console.error('pushed request_uri resolution failed', error);
+    return { ok: false, status: 500, error: 'server_error', errorDescription: 'The pushed authorization request could not be resolved' };
   }
 }
 
@@ -159,16 +167,28 @@ export function createParApp(): Hono<{ Variables: Record<string, any> }> {
     }
 
     try {
-      assertAllowedScopes(parsed.params.scope, runtime.allowedScopes);
-      const config = (c.get('config') ?? {}) as { allowNonPkceAuthorizationCodeFlow?: boolean };
-      const pushed = await handlePushedAuthorizationRequest({
+      // Same steps as the package's handlePushedAuthorizationRequest, spelled out so the
+      // publisher's scope check lands after client authentication (RFC 9126 §2.1): an
+      // anonymous caller must get invalid_client, not a readout of the allowed scopes.
+      rejectForbiddenParParams(parsed.params);
+      const clientId = await authenticateParClient({
         params: parsed.params,
         authorizationHeader: c.req.header('Authorization'),
         clientResolver: runtime.clientResolver,
+      });
+      assertAllowedScopes(parsed.params.scope, runtime.allowedScopes);
+      const params = { ...parsed.params, client_id: clientId };
+      const config = (c.get('config') ?? {}) as { allowNonPkceAuthorizationCodeFlow?: boolean };
+      await validatePushedAuthorizationParams(params, runtime.clientResolver, {
+        allowNonPkceAuthorizationCodeFlow: config.allowNonPkceAuthorizationCodeFlow,
+      });
+      const record = await createPushedAuthorizationRecord({
+        clientId,
+        params,
         store: runtime.store,
-        validationOptions: { allowNonPkceAuthorizationCodeFlow: config.allowNonPkceAuthorizationCodeFlow },
         expiresInSeconds: runtime.expiresInSeconds,
       });
+      const pushed = buildPushedAuthorizationResponse(record);
       return c.json({ request_uri: pushed.requestUri, expires_in: pushed.expiresIn }, 201);
     } catch (error) {
       if (error instanceof ParError) {

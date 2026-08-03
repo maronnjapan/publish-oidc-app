@@ -67,7 +67,6 @@ export async function deployOp(opId) {
     { type: "plain_text", name: "OP_ID", text: opId },
     { type: "plain_text", name: "OP_ISSUER", text: issuer },
     { type: "plain_text", name: "ALLOWED_SCOPES", text: JSON.stringify(config.scopes) },
-    { type: "plain_text", name: "EXPERIMENTAL_FEATURES", text: JSON.stringify(generated.experimental) },
   ]);
   await setWorkerSecret(infra, token, opId, "OIDC_SIGNING_JWK", await createSigningJwk());
   await setWorkerSecret(infra, token, opId, "OIDC_CLIENT_CONFIG", JSON.stringify(client));
