@@ -34,6 +34,20 @@ function parseRequestConfig(row, opId) {
   return { ...config, op_id: opId };
 }
 
+export const TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange";
+
+/**
+ * The generated OP authorizes a grant against the client's registered grantTypes, so an
+ * experimental grant has to be registered alongside the standard ones or every exchange
+ * comes back unauthorized_client.
+ */
+export function clientGrantTypes(features, experimental = {}) {
+  const grantTypes = ["authorization_code"];
+  if (features["refresh-token"]) grantTypes.push("refresh_token");
+  if (experimental["token-exchange"]) grantTypes.push(TOKEN_EXCHANGE_GRANT_TYPE);
+  return grantTypes;
+}
+
 async function createSigningJwk() {
   const pair = await webcrypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
   const jwk = await webcrypto.subtle.exportKey("jwk", pair.privateKey);
@@ -59,7 +73,7 @@ export async function deployOp(opId) {
     redirectUris: [config.redirect_url],
     clientType: config.client_type,
     offlineAccessAllowed: config.scopes.includes("offline_access"),
-    grantTypes: config.features["refresh-token"] ? ["authorization_code", "refresh_token"] : ["authorization_code"],
+    grantTypes: clientGrantTypes(config.features, generated.experimental),
     tokenEndpointAuthMethod: config.client_type === "public" ? "none" : "client_secret_post",
   };
   await uploadWorker(infra, token, opId, code, [

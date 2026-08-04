@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Follows @maronn-oidc/cli, @maronn-oidc/core and @maronn-oidc/experimental releases.
+// Follows @maronn-openid-connect/cli, @maronn-openid-connect/core and @maronn-openid-connect/experimental releases.
 //
 //   node scripts/check-package-updates.mjs             report only (exit 0)
 //   node scripts/check-package-updates.mjs --apply      also bump the pins and the catalog
@@ -8,7 +8,7 @@
 //
 // Reporting covers three questions:
 //   1. is a newer version published?
-//   2. does @maronn-oidc/experimental export a feature the catalog does not know about?
+//   2. does @maronn-openid-connect/experimental export a feature the catalog does not know about?
 //   3. did the CLI's own feature toggles change?
 // Newly discovered experimental features are recorded as status "detected"; wiring them
 // up so the portal can offer them is a code change described in docs/experimental.md.
@@ -25,9 +25,9 @@ const REGISTRY = (process.env.NPM_CONFIG_REGISTRY || "https://registry.npmjs.org
 const FEATURE_ID_PATTERN = /^[a-z][a-z0-9-]{0,30}$/;
 
 const TRACKED_PACKAGES = [
-  { name: "@maronn-oidc/cli", configKey: "maronnOidcCli", dependencyField: "devDependencies" },
-  { name: "@maronn-oidc/core", configKey: "maronnOidcCore", dependencyField: "dependencies" },
-  { name: "@maronn-oidc/experimental", configKey: "maronnOidcExperimental", dependencyField: "dependencies" },
+  { name: "@maronn-openid-connect/cli", configKey: "maronnOidcCli", dependencyField: "devDependencies" },
+  { name: "@maronn-openid-connect/core", configKey: "maronnOidcCore", dependencyField: "dependencies" },
+  { name: "@maronn-openid-connect/experimental", configKey: "maronnOidcExperimental", dependencyField: "dependencies" },
 ];
 
 /** Feature toggles the generator and the portal currently understand. */
@@ -100,7 +100,7 @@ async function fetchVersionManifest(name, version) {
   return registryJson(`${encodePackageName(name)}/${encodeURIComponent(version)}`, "application/json");
 }
 
-/** Feature ids are the subpath exports of @maronn-oidc/experimental (`./par` -> `par`). */
+/** Feature ids are the subpath exports of @maronn-openid-connect/experimental (`./par` -> `par`). */
 export function experimentalFeatureIds(packageManifest) {
   const exportsMap = packageManifest?.exports;
   if (!exportsMap || typeof exportsMap !== "object") return { ids: [], unsupportedSubpaths: [] };
@@ -117,17 +117,29 @@ export function experimentalFeatureIds(packageManifest) {
   return { ids, unsupportedSubpaths };
 }
 
-/** The CLI prints its toggle list in --help, which is the only published surface for it. */
+function parseFeatureList(line) {
+  return line.split(",").map((feature) => feature.trim()).filter(Boolean);
+}
+
+/**
+ * The CLI prints both toggle lists in --help, which is the only published surface for
+ * them. The experimental list is what gates whether a catalog entry can be generated at
+ * all, so a catalog id the CLI does not know is worth reporting.
+ */
 async function cliFeatures(version) {
   try {
     const { stdout } = await execFile(
       "npm",
-      ["exec", "--yes", `--package=@maronn-oidc/cli@${version}`, "--", "maronn-oidc", "--help"],
+      ["exec", "--yes", `--package=@maronn-openid-connect/cli@${version}`, "--", "maronn-oidc", "--help"],
       { cwd: ROOT, maxBuffer: 4 * 1024 * 1024, timeout: 180_000 },
     );
-    const match = stdout.match(/Features \(all enabled by default\):\s*(.+)/);
-    if (!match) return null;
-    return match[1].split(",").map((feature) => feature.trim()).filter(Boolean);
+    const standard = stdout.match(/Features \(all enabled by default\):\s*(.+)/);
+    if (!standard) return null;
+    const experimental = stdout.match(/Experimental features \(disabled by default\):\s*(.+)/);
+    return {
+      features: parseFeatureList(standard[1]),
+      experimental: experimental ? parseFeatureList(experimental[1]) : [],
+    };
   } catch {
     return null;
   }
@@ -145,7 +157,7 @@ export async function collectReport({ inspectCliFeatures = true } = {}) {
     const packument = await fetchPackument(tracked.name);
     const latest = packument["dist-tags"]?.latest;
     if (typeof latest !== "string") throw new Error(`${tracked.name} has no dist-tags.latest`);
-    if (tracked.name === "@maronn-oidc/experimental") {
+    if (tracked.name === "@maronn-openid-connect/experimental") {
       experimentalManifest = packument.versions?.[latest]?.exports
         ? packument.versions[latest]
         : await fetchVersionManifest(tracked.name, latest);
@@ -159,7 +171,7 @@ export async function collectReport({ inspectCliFeatures = true } = {}) {
     });
   }
 
-  const experimentalPackage = packages.find((entry) => entry.name === "@maronn-oidc/experimental");
+  const experimentalPackage = packages.find((entry) => entry.name === "@maronn-openid-connect/experimental");
   const { ids: publishedFeatureIds, unsupportedSubpaths } = experimentalFeatureIds(experimentalManifest);
   const catalogIds = catalog.features.map((feature) => feature.id);
   const experimental = {
@@ -171,13 +183,16 @@ export async function collectReport({ inspectCliFeatures = true } = {}) {
     unsupportedSubpaths,
   };
 
-  const cliPackage = packages.find((entry) => entry.name === "@maronn-oidc/cli");
-  const features = inspectCliFeatures ? await cliFeatures(cliPackage.latest) : null;
+  const cliPackage = packages.find((entry) => entry.name === "@maronn-openid-connect/cli");
+  const toggles = inspectCliFeatures ? await cliFeatures(cliPackage.latest) : null;
   const cli = {
     latest: cliPackage.latest,
-    features,
-    added: features ? features.filter((feature) => !KNOWN_CLI_FEATURES.includes(feature)) : [],
-    removed: features ? KNOWN_CLI_FEATURES.filter((feature) => !features.includes(feature)) : [],
+    features: toggles?.features ?? null,
+    experimental: toggles?.experimental ?? null,
+    added: toggles ? toggles.features.filter((feature) => !KNOWN_CLI_FEATURES.includes(feature)) : [],
+    removed: toggles ? KNOWN_CLI_FEATURES.filter((feature) => !toggles.features.includes(feature)) : [],
+    // A catalog entry the CLI cannot generate is unusable, whatever the package exports.
+    ungeneratable: toggles ? catalog.features.filter((feature) => feature.status === "supported" && !toggles.experimental.includes(feature.id)).map((feature) => feature.id) : [],
   };
 
   return {
@@ -186,12 +201,12 @@ export async function collectReport({ inspectCliFeatures = true } = {}) {
     experimental,
     cli,
     hasUpdates: packages.some((entry) => entry.hasUpdate),
-    hasCatalogWork: experimental.added.length > 0 || experimental.removed.length > 0 || cli.added.length > 0 || cli.removed.length > 0,
+    hasCatalogWork: experimental.added.length > 0 || experimental.removed.length > 0 || cli.added.length > 0 || cli.removed.length > 0 || cli.ungeneratable.length > 0,
   };
 }
 
 export function renderReport(report) {
-  const lines = ["## @maronn-oidc パッケージ追従レポート", "", `検査時刻: ${report.checkedAt}`, "", "| パッケージ | 固定中 | 最新 | 状態 |", "|---|---|---|---|"];
+  const lines = ["## @maronn-openid-connect パッケージ追従レポート", "", `検査時刻: ${report.checkedAt}`, "", "| パッケージ | 固定中 | 最新 | 状態 |", "|---|---|---|---|"];
   for (const entry of report.packages) {
     lines.push(`| \`${entry.name}\` | ${entry.pinned} | ${entry.latest} | ${entry.hasUpdate ? "**更新あり**" : "最新"} |`);
   }
@@ -222,11 +237,13 @@ export function renderReport(report) {
     lines.push("- `maronn-oidc --help` からトグル一覧を取得できませんでした。手動で確認してください。");
   } else {
     lines.push(`- 最新CLIのトグル: ${report.cli.features.map((feature) => `\`${feature}\``).join(", ")}`);
+    lines.push(`- 最新CLIのexperimentalトグル: ${(report.cli.experimental ?? []).map((feature) => `\`${feature}\``).join(", ") || "（なし）"}`);
     if (report.cli.added.length > 0) lines.push(`- **未対応のトグル: ${report.cli.added.map((feature) => `\`${feature}\``).join(", ")}** — ポータルの \`FEATURE_NAMES\` と生成/デプロイの \`FEATURES\` に追加してください。`);
     if (report.cli.removed.length > 0) lines.push(`- **廃止されたトグル: ${report.cli.removed.map((feature) => `\`${feature}\``).join(", ")}** — 参照を削除してください。`);
+    if (report.cli.ungeneratable.length > 0) lines.push(`- **CLIが生成できないカタログ項目: ${report.cli.ungeneratable.map((feature) => `\`${feature}\``).join(", ")}** — カタログでは supported ですが最新CLIの \`--enable\` が受け付けません。カタログを \`detected\` へ戻すか、CLIの更新を待ってください。`);
   }
   lines.push("");
-  lines.push("バージョンを上げたら `npm run check` を実行してください。`test/experimental-par.test.mjs` が experimental と core の組み合わせを実際にバンドルして検証します。");
+  lines.push("バージョンを上げたら `npm run check` を実行してください。`test/experimental.test.mjs` が各experimental機能を実際に生成・バンドルして検証します。");
   return `${lines.join("\n")}\n`;
 }
 
@@ -234,10 +251,10 @@ function catalogEntryForDetectedFeature(id, version) {
   return {
     id,
     status: "detected",
-    subpath: `@maronn-oidc/experimental/${id}`,
+    subpath: `@maronn-openid-connect/experimental/${id}`,
     label: `${id}（未配線）`,
     spec: "",
-    summary: `@maronn-oidc/experimental@${version} が公開した新機能です。docs/experimental.md の手順で配線するとポータルで選択できるようになります。`,
+    summary: `@maronn-openid-connect/experimental@${version} が公開した新機能です。docs/experimental.md の手順で配線するとポータルで選択できるようになります。`,
     endpoints: [],
     detected_version: version,
   };

@@ -10,12 +10,9 @@
     "noEmit": true,
     "skipLibCheck": true
   },
+  "//": "The Cloudflare templates import their generated siblings (./store.js, ./oidc-provider/apply.js) and only resolve once an OP has been generated. test/generator.test.mjs type-checks a generated app instead.",
   "include": [
-    "system/**/*.ts",
-    "templates/cloudflare/store.ts",
-    "templates/cloudflare/resolvers.ts",
-    "templates/cloudflare/persistence.ts",
-    "templates/cloudflare/experimental/*.ts"
+    "system/**/*.ts"
   ],
   "exclude": ["apps", "dist", "node_modules"]
 }

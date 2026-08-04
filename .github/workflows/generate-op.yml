@@ -35,7 +35,7 @@ jobs:
       - run: npm ci
       - name: Mark request generating
         run: node scripts/update-request.mjs "$REQUEST_ID" generating
-      - name: Generate with @maronn-oidc/cli and deploy through Cloudflare API
+      - name: Generate with @maronn-openid-connect/cli and deploy through Cloudflare API
         run: node scripts/deploy-op.mjs "$OP_ID"
       - name: Mark request failed
         if: failure()

@@ -95,8 +95,8 @@ function experimentalCard(): string {
         </div>`;
   }).join("");
   return `    <section class="card">
-      <fieldset><legend>試験的な機能（@maronn-oidc/experimental）</legend>
-        <p class="warning"><strong>注意:</strong> ここは <code>@maronn-oidc/experimental</code> の機能です。APIが安定しておらず、<strong>他の機能より適切に動作しない可能性が高い</strong>ため、動作検証にのみ使ってください。マイナーリリースでも破壊的変更や削除が起こり得ます。</p>${entries}
+      <fieldset><legend>試験的な機能（@maronn-openid-connect/experimental）</legend>
+        <p class="warning"><strong>注意:</strong> ここは <code>@maronn-openid-connect/experimental</code> の機能です。APIが安定しておらず、<strong>他の機能より適切に動作しない可能性が高い</strong>ため、動作検証にのみ使ってください。マイナーリリースでも破壊的変更や削除が起こり得ます。</p>${entries}
       </fieldset>
     </section>
 `;
@@ -164,7 +164,7 @@ const HTML = String.raw`<!doctype html>
 <main>
   <header>
     <h1>OpenID Providerを作成</h1>
-    <p>Honoと @maronn-oidc/core で構成した専用Cloudflare Workerを発行します。状態は共有D1へOPごとに分離して保存されます。</p>
+    <p>Honoと @maronn-openid-connect/core で構成した専用Cloudflare Workerを発行します。状態は共有D1へOPごとに分離して保存されます。</p>
   </header>
   <form id="form">
     <section class="card">
@@ -407,7 +407,7 @@ function showResult(data, credentials, experimental) {
   const note = document.createElement('p'); note.textContent = credentials.client_secret ? 'シークレットは再表示できません。今すぐ安全な場所へ保存してください。' : 'publicクライアントのためシークレットは発行されません。'; box.append(note);
   if (experimental.length) {
     const warning = document.createElement('p'); warning.className = 'warning';
-    warning.textContent = '試験的な機能を有効にしています（' + experimental.map((entry) => entry.label + ': ' + entry.endpoints).join(' / ') + '）。@maronn-oidc/experimental はAPIが安定しておらず、他の機能より適切に動作しない可能性が高い点にご注意ください。';
+    warning.textContent = '試験的な機能を有効にしています（' + experimental.map((entry) => entry.label + ': ' + entry.endpoints).join(' / ') + '）。@maronn-openid-connect/experimental はAPIが安定しておらず、他の機能より適切に動作しない可能性が高い点にご注意ください。';
     box.append(warning);
   }
   statusBox.append(box);

@@ -1,21 +1,26 @@
 import assert from "node:assert/strict";
+import { execFile as execFileCallback } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { webcrypto } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
+
+const execFile = promisify(execFileCallback);
 import { generateOp } from "../scripts/generate-op.mjs";
 import { bundle } from "../scripts/lib.mjs";
 
 const opId = "maronn-op-test123456";
 const generated = await generateOp(opId, path.resolve("test/fixtures/op-config.json"));
 
-test("OP generation runs the pinned @maronn-oidc CLI with Hono and records provenance", async () => {
+test("OP generation runs the pinned @maronn-openid-connect CLI with Hono and records provenance", async () => {
   const metadata = JSON.parse(await readFile(path.join(generated.appDirectory, "op.json"), "utf8"));
   assert.equal(metadata.framework, "hono");
-  assert.equal(metadata.generator, "@maronn-oidc/cli@0.0.1");
-  assert.equal(metadata.core, "@maronn-oidc/core@0.0.1");
+  assert.equal(metadata.generator, "@maronn-openid-connect/cli@0.0.1");
+  assert.equal(metadata.core, "@maronn-openid-connect/core@0.0.1");
   assert.deepEqual(metadata.scopes, ["openid", "profile", "email"]);
 });
 
@@ -23,26 +28,34 @@ test("feature selections alter CLI output", async () => {
   const apply = await readFile(path.join(generated.appDirectory, "src/oidc-provider/apply.ts"), "utf8");
   assert.doesNotMatch(apply, /introspectionApp/);
   assert.match(apply, /revocationApp/);
-  assert.match(apply, /@maronn-oidc\/core/);
+  assert.match(apply, /@maronn-openid-connect\/core/);
 });
 
-test("Cloudflare overlay has no in-memory fallback and enforces selected scopes", async () => {
+test("the D1 overlay backs every store and the selected scopes are enforced", async () => {
   const store = await readFile(path.join(generated.appDirectory, "src/oidc-provider/store.ts"), "utf8");
   const persistence = await readFile(path.join(generated.appDirectory, "src/oidc-provider/persistence.ts"), "utf8");
   const authorize = await readFile(path.join(generated.appDirectory, "src/oidc-provider/routes/authorize.ts"), "utf8");
   const discovery = await readFile(path.join(generated.appDirectory, "src/oidc-provider/routes/discovery.ts"), "utf8");
-  assert.doesNotMatch(store, /new Map/);
-  assert.match(store, /D1 OIDC runtime was not injected/);
+  const index = await readFile(path.join(generated.appDirectory, "src/index.ts"), "utf8");
   assert.match(persistence, /oidc_records/);
+  assert.match(index, /storage: \(\) => createD1ProviderStores/, "applyOidc must be given the D1 stores, never the generated defaults");
   assert.match(authorize, /Unsupported scope/);
   assert.match(discovery, /allowedScopes/);
+  // Both of the CLI's development fixture paths are disarmed.
+  assert.match(store, /accounts come from the shared D1 only/);
+  assert.match(store, /must never authenticate on a published OP/);
 });
 
-test("an OP without experimental features never references @maronn-oidc/experimental", async () => {
-  const index = await readFile(path.join(generated.appDirectory, "src/index.ts"), "utf8");
+test("the generated app carries a tsconfig that checks the overlay against the store contract", async () => {
+  const tsconfig = JSON.parse(await readFile(path.join(generated.appDirectory, "tsconfig.json"), "utf8"));
+  assert.deepEqual(tsconfig.include, ["src/oidc-provider/persistence.ts"]);
+  await execFile("npx", ["tsc", "-p", generated.appDirectory], { cwd: process.cwd() });
+});
+
+test("an OP without experimental features references neither the package nor its routes", async () => {
   const authorize = await readFile(path.join(generated.appDirectory, "src/oidc-provider/routes/authorize.ts"), "utf8");
-  assert.match(index, /EXPERIMENTAL_IMPORT_PLACEHOLDER/, "placeholders stay untouched when nothing is selected");
   assert.doesNotMatch(authorize, /experimental/);
+  assert.equal(existsSync(path.join(generated.appDirectory, "src/oidc-provider/routes/par.ts")), false);
   assert.deepEqual(JSON.parse(await readFile(path.join(generated.appDirectory, "op.json"), "utf8")).experimental, {});
   const code = await bundle(generated.entryPoint, { absWorkingDir: generated.appDirectory });
   assert.doesNotMatch(code, /urn:ietf:params:oauth:request_uri:/);

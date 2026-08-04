@@ -256,7 +256,7 @@ test("the UI offers every supported experimental feature and warns that they are
     assert.doesNotMatch(HTML, new RegExp(`value="${detected.id}" data-label=`), "features that are not wired up must not be selectable");
   }
   assert.match(HTML, /他の機能より適切に動作しない可能性が高い/);
-  assert.match(HTML, /@maronn-oidc\/experimental はAPIが安定しておらず/);
+  assert.match(HTML, /@maronn-openid-connect\/experimental はAPIが安定しておらず/);
 });
 
 test("experimental selections are validated against the catalog and defaulted", () => {

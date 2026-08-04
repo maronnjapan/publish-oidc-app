@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -37,7 +37,7 @@ export async function readInfra() {
 
 export const EXPERIMENTAL_CATALOG_PATH = path.join(ROOT, "experimental-features.json");
 
-/** Single source of truth for @maronn-oidc/experimental features (see docs/experimental.md). */
+/** Single source of truth for @maronn-openid-connect/experimental features (see docs/experimental.md). */
 export async function readExperimentalCatalog() {
   let catalog;
   try {
@@ -109,35 +109,7 @@ export function getD1Rows(result) {
   return Array.isArray(result?.results) ? result.results : [];
 }
 
-const EXPERIMENTAL_PACKAGE_SEGMENT = /[\\/]@maronn-oidc[\\/]experimental[\\/]/;
-
-/**
- * @maronn-oidc/experimental imports client-authentication helpers that the pinned
- * @maronn-oidc/core does not export yet, so bundling it fails outright. When the OP
- * being bundled carries the experimental overlay, redirect only the imports made from
- * inside that package to the overlay's core-compat module, which re-exports the real
- * core plus the missing helpers. Every other importer keeps resolving core normally,
- * so there is still a single core instance for the package's instanceof checks.
- */
-async function coreCompatPlugin(entryPoint) {
-  const compatPath = path.resolve(path.dirname(entryPoint), "oidc-provider", "experimental", "core-compat.ts");
-  try {
-    await access(compatPath);
-  } catch {
-    return undefined;
-  }
-  return {
-    name: "maronn-oidc-core-compat",
-    setup(build) {
-      build.onResolve({ filter: /^@maronn-oidc\/core$/ }, (args) =>
-        EXPERIMENTAL_PACKAGE_SEGMENT.test(args.importer) ? { path: compatPath } : null);
-    },
-  };
-}
-
 export async function bundle(entryPoint, options = {}) {
-  const compat = await coreCompatPlugin(entryPoint);
-  const { plugins = [], ...rest } = options;
   const output = await build({
     entryPoints: [entryPoint],
     bundle: true,
@@ -147,8 +119,7 @@ export async function bundle(entryPoint, options = {}) {
     conditions: ["workerd"],
     target: "es2022",
     legalComments: "none",
-    ...rest,
-    plugins: compat ? [compat, ...plugins] : plugins,
+    ...options,
   });
   if (!output.outputFiles[0]) throw new Error(`esbuild produced no output for ${entryPoint}`);
   return output.outputFiles[0].text;

@@ -7,9 +7,9 @@
     "node": ">=22"
   },
   "config": {
-    "maronnOidcCli": "@maronn-oidc/cli@0.0.1",
-    "maronnOidcCore": "@maronn-oidc/core@0.0.1",
-    "maronnOidcExperimental": "@maronn-oidc/experimental@0.0.1"
+    "maronnOidcCli": "@maronn-openid-connect/cli@0.0.1",
+    "maronnOidcCore": "@maronn-openid-connect/core@0.0.1",
+    "maronnOidcExperimental": "@maronn-openid-connect/experimental@0.0.1"
   },
   "scripts": {
     "build": "npm run build:portal",
@@ -25,13 +25,13 @@
     "check": "npm run typecheck && npm run audit:scripts && npm test && npm run build"
   },
   "dependencies": {
-    "@maronn-oidc/core": "0.0.1",
-    "@maronn-oidc/experimental": "0.0.1",
+    "@maronn-openid-connect/core": "0.0.1",
+    "@maronn-openid-connect/experimental": "0.0.1",
     "hono": "^4.9.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260722.1",
-    "@maronn-oidc/cli": "0.0.1",
+    "@maronn-openid-connect/cli": "0.0.1",
     "esbuild": "^0.28.1",
     "typescript": "^5.9.2"
   }

@@ -1,11 +1,11 @@
 {
-  "package": "@maronn-oidc/experimental",
-  "note": "@maronn-oidc/experimental の機能カタログ。ポータルUI・生成スクリプト・追従チェックが共通で参照する単一の情報源です。status が supported の機能だけがポータルUIに表示され、生成OPへ配線されます。scripts/check-package-updates.mjs が新しいsubpath exportを見つけると status: detected として追記します（配線手順は docs/experimental.md）。",
+  "package": "@maronn-openid-connect/experimental",
+  "note": "@maronn-openid-connect/experimental の機能カタログ。ポータルUI・生成スクリプト・追従チェックが共通で参照する単一の情報源です。status が supported の機能だけがポータルUIに表示され、CLIの --enable へ渡されます。scripts/check-package-updates.mjs が新しいsubpath exportを見つけると status: detected として追記します（配線手順は docs/experimental.md）。",
   "features": [
     {
       "id": "par",
       "status": "supported",
-      "subpath": "@maronn-oidc/experimental/par",
+      "subpath": "@maronn-openid-connect/experimental/par",
       "label": "PAR（Pushed Authorization Requests）",
       "spec": "RFC 9126",
       "summary": "認可リクエストをバックチャネルで事前POSTし、返却された request_uri を /authorize に渡します。パラメータがブラウザのURLに載らず、改ざんもできません。",
@@ -16,9 +16,20 @@
           "id": "required",
           "label": "PARを必須にする",
           "default": false,
-          "hint": "有効にすると request_uri のない /authorize を invalid_request で拒否します（require_pushed_authorization_requests=true）。"
+          "hint": "有効にすると request_uri のない /authorize を拒否します（require_pushed_authorization_requests=true）。"
         }
       ]
+    },
+    {
+      "id": "token-exchange",
+      "status": "supported",
+      "subpath": "@maronn-openid-connect/experimental/token-exchange",
+      "label": "Token Exchange",
+      "spec": "RFC 8693",
+      "summary": "発行済みアクセストークンを subject_token として /token へ渡し、スコープを絞ったトークンへ交換します。専用エンドポイントは増えず、grant_type=urn:ietf:params:oauth:grant-type:token-exchange として動作します。",
+      "endpoints": ["POST /token (grant_type=urn:ietf:params:oauth:grant-type:token-exchange)"],
+      "discovery": ["grant_types_supported"],
+      "options": []
     }
   ]
 }

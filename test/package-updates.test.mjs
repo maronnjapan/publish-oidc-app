@@ -38,25 +38,27 @@ test("experimental feature ids come from the published subpath exports", () => {
 test("the report calls out new, removed, and unwired experimental features", () => {
   const markdown = renderReport({
     checkedAt: "2026-08-03T00:00:00.000Z",
-    packages: [{ name: "@maronn-oidc/experimental", pinned: "0.0.1", latest: "0.1.0", hasUpdate: true }],
+    packages: [{ name: "@maronn-openid-connect/experimental", pinned: "0.0.1", latest: "0.1.0", hasUpdate: true }],
     experimental: { latest: "0.1.0", published: ["par", "dpop"], added: ["dpop"], removed: ["rar"], unwired: ["dpop"], unsupportedSubpaths: [] },
-    cli: { latest: "0.1.0", features: ["pkce", "par"], added: ["par"], removed: [] },
+    cli: { latest: "0.1.0", features: ["pkce"], experimental: ["par"], added: ["pkce-plus"], removed: [], ungeneratable: ["dpop"] },
     hasUpdates: true,
     hasCatalogWork: true,
   });
   assert.match(markdown, /新機能: `dpop`/);
   assert.match(markdown, /削除された機能: `rar`/);
   assert.match(markdown, /未配線のまま残っている機能: `dpop`/);
-  assert.match(markdown, /未対応のトグル: `par`/);
+  assert.match(markdown, /未対応のトグル: `pkce-plus`/);
+  assert.match(markdown, /CLIが生成できないカタログ項目: `dpop`/);
+  assert.match(markdown, /最新CLIのexperimentalトグル: `par`/);
   assert.match(markdown, /docs\/experimental\.md/);
 });
 
 test("the tracked packages stay pinned to exact versions", async () => {
   const rootPackage = JSON.parse(await readFile("package.json", "utf8"));
-  for (const [key, name] of [["maronnOidcCli", "@maronn-oidc/cli"], ["maronnOidcCore", "@maronn-oidc/core"], ["maronnOidcExperimental", "@maronn-oidc/experimental"]]) {
+  for (const [key, name] of [["maronnOidcCli", "@maronn-openid-connect/cli"], ["maronnOidcCore", "@maronn-openid-connect/core"], ["maronnOidcExperimental", "@maronn-openid-connect/experimental"]]) {
     assert.match(rootPackage.config[key], new RegExp(`^${name}@\\d+\\.\\d+\\.\\d+$`));
   }
-  assert.match(rootPackage.dependencies["@maronn-oidc/experimental"], /^\d+\.\d+\.\d+$/);
+  assert.match(rootPackage.dependencies["@maronn-openid-connect/experimental"], /^\d+\.\d+\.\d+$/);
   assert.equal(rootPackage.scripts["packages:check"], "node scripts/check-package-updates.mjs");
   assert.equal(rootPackage.scripts["packages:update"], "node scripts/check-package-updates.mjs --apply");
 });

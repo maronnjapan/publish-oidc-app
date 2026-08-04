@@ -49,123 +49,117 @@ export function parseExperimentalSelection(value, catalog) {
   return selection;
 }
 
-const EXPERIMENTAL_PLACEHOLDERS = {
-  import: "// <!-- EXPERIMENTAL_IMPORT_PLACEHOLDER -->",
-  runtime: "  // <!-- EXPERIMENTAL_RUNTIME_PLACEHOLDER -->",
-  context: "    // <!-- EXPERIMENTAL_CONTEXT_PLACEHOLDER -->",
-  route: "  // <!-- EXPERIMENTAL_ROUTE_PLACEHOLDER -->",
-};
-
-const EXPERIMENTAL_CONFIG_LINE = "const EXPERIMENTAL_FEATURES: Record<string, Record<string, unknown>> = {};";
-
 /**
- * Per-feature snippets injected into templates/cloudflare/index.ts. The `context` entry
- * must merge into experimentalDiscoveryMetadata rather than assign it, so two selected
- * features do not overwrite each other's discovery keys.
+ * Per-feature adjustments applied after the CLI has generated the feature itself. The
+ * CLI owns the routes and the discovery metadata; only settings the publisher UI exposes
+ * are patched here.
  */
 export const EXPERIMENTAL_WIRING = {
   par: {
-    import: "import { createParApp, createParRuntime, parDiscoveryMetadata, PAR_ENDPOINT_PATH } from './oidc-provider/experimental/par.js';",
-    runtime: "  const parRuntime = createParRuntime({ store: runtime.pushedAuthorizationRequestStore, clientResolver: runtime.clientResolver, allowedScopes: scopes, options: EXPERIMENTAL_FEATURES.par });",
-    context: "    c.set('parRuntime', parRuntime);\n    c.set('experimentalDiscoveryMetadata', { ...(c.get('experimentalDiscoveryMetadata') as Record<string, unknown> | undefined ?? {}), ...parDiscoveryMetadata(env.OP_ISSUER, parRuntime) });",
-    route: "  app.route(PAR_ENDPOINT_PATH, createParApp());",
-    files: ["par.ts"],
+    apply(sources, options) {
+      // The generated PAR store is in-memory. Let the D1-backed one that the Worker
+      // entrypoint seeds into context win (templates/cloudflare/index.ts).
+      sources["apply.ts"] = replaceOnce(
+        sources["apply.ts"],
+        "    c.set('parStore', parStore);",
+        "    c.set('parStore', c.get('parStore') ?? parStore);",
+        "generated apply.ts",
+      );
+      // /authorize enforces the publisher's scope selection too, but a client that pushes
+      // an unavailable scope should learn about it at push time rather than one redirect
+      // later (RFC 9126 §2.1 validates as the authorization endpoint would).
+      sources["routes/par.ts"] = replaceOnce(
+        sources["routes/par.ts"],
+        "    const pushedParams = { ...params, client_id: clientId };",
+        "    const pushedParams = { ...params, client_id: clientId };\n\n    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = (pushedParams.scope ?? '').split(' ').filter((scope) => scope.length > 0 && !allowedScopes.includes(scope));\n    if (unsupportedScopes.length > 0) {\n      throw new ParError('invalid_scope', 'Unsupported scope: ' + unsupportedScopes.join(' '));\n    }",
+        "generated routes/par.ts",
+      );
+      if (options.required) {
+        sources["routes/par.ts"] = replaceOnce(
+          sources["routes/par.ts"],
+          "  requirePushedAuthorizationRequests: false,",
+          "  requirePushedAuthorizationRequests: true,",
+          "generated routes/par.ts",
+        );
+      }
+    },
+  },
+  "token-exchange": {
+    // RFC 8693 is generated whole by the CLI. allowedTargets stays empty (fail safe):
+    // scope-narrowing and lifetime-shortening exchanges work, naming a target does not.
+    apply() {},
   },
 };
+
+const EXPERIMENTAL_CONFIG_LINE = "const EXPERIMENTAL_FEATURES: Record<string, Record<string, unknown>> = {};";
 
 function replaceOnce(source, marker, replacement, description) {
   if (!source.includes(marker)) throw new Error(`${description} does not contain the expected marker`);
   return source.replace(marker, replacement);
 }
 
-/** Wires the selected experimental features into the Cloudflare entrypoint. */
-async function applyExperimentalWiring(sourceDirectory, providerDirectory, experimental) {
-  const sections = { import: [], runtime: [], context: [], route: [] };
-  const files = new Set(["core-compat.ts"]);
-  for (const id of Object.keys(experimental)) {
-    const wiring = EXPERIMENTAL_WIRING[id];
-    if (!wiring) throw new Error(`experimental feature ${JSON.stringify(id)} has no generator wiring; see docs/experimental.md`);
-    for (const key of ["import", "runtime", "context", "route"]) sections[key].push(wiring[key]);
-    for (const file of wiring.files) files.add(file);
-  }
-
-  const experimentalDirectory = path.join(providerDirectory, "experimental");
-  await mkdir(experimentalDirectory, { recursive: true });
-  for (const file of files) {
-    await cp(path.join(ROOT, "templates", "cloudflare", "experimental", file), path.join(experimentalDirectory, file));
-  }
-
-  const indexPath = path.join(sourceDirectory, "index.ts");
-  let index = await readFile(indexPath, "utf8");
-  for (const [key, marker] of Object.entries(EXPERIMENTAL_PLACEHOLDERS)) {
-    index = replaceOnce(index, marker, sections[key].join("\n"), "Cloudflare entrypoint template");
-  }
-  // Baked in rather than passed as a Worker binding: `required` and friends decide how
-  // strict the deployed OP is, and a binding can be edited or dropped after deployment.
-  index = replaceOnce(
-    index,
-    EXPERIMENTAL_CONFIG_LINE,
-    EXPERIMENTAL_CONFIG_LINE.replace("= {};", `= ${JSON.stringify(experimental)};`),
-    "Cloudflare entrypoint template",
-  );
-  await writeFile(indexPath, index);
-
-  const authorizePath = path.join(providerDirectory, "routes", "authorize.ts");
-  let authorize = await readFile(authorizePath, "utf8");
-  authorize = replaceOnce(
-    authorize,
-    "import { defaultViews, renderView } from '../views.js';",
-    "import { defaultViews, renderView } from '../views.js';\nimport { resolvePushedAuthorizationParams } from '../experimental/par.js';",
-    "generated authorize.ts",
-  );
-  authorize = replaceOnce(
-    authorize,
-    "  const params = rawParams;",
-    [
-      "  // Experimental (RFC 9126 §4): swap a pushed request_uri for the parameters stored",
-      "  // at /par before validation, so only what the client pushed is honoured.",
-      "  const pushedRequest = await resolvePushedAuthorizationParams(c.get('parRuntime'), rawParams);",
-      "  if (!pushedRequest.ok) {",
-      "    return c.json({ error: pushedRequest.error, error_description: pushedRequest.errorDescription }, pushedRequest.status);",
-      "  }",
-      "  const params = pushedRequest.params as typeof rawParams;",
-    ].join("\n"),
-    "generated authorize.ts",
-  );
-  await writeFile(authorizePath, authorize);
-
-  const discoveryPath = path.join(providerDirectory, "routes", "discovery.ts");
-  let discovery = await readFile(discoveryPath, "utf8");
-  discovery = replaceOnce(
-    discovery,
-    "    code_challenge_methods_supported: ['S256'],",
-    "    code_challenge_methods_supported: ['S256'],\n    ...((c.get('experimentalDiscoveryMetadata') as Record<string, unknown> | undefined) ?? {}),",
-    "generated discovery.ts",
-  );
-  await writeFile(discoveryPath, discovery);
-}
-
-async function patchGeneratedSource(providerDirectory) {
-  const loginPath = path.join(providerDirectory, "routes", "login.ts");
-  let login = await readFile(loginPath, "utf8");
-  login = login.replace("if (existingSessionId) browserSessionStore.delete(existingSessionId);", "if (existingSessionId) await browserSessionStore.delete(existingSessionId);");
-  login = login.replace("  browserSessionStore.set(sessionId, { subject: user.sub, authTime });", "  await browserSessionStore.set(sessionId, { subject: user.sub, authTime });");
-  await writeFile(loginPath, login);
-
-  const authorizePath = path.join(providerDirectory, "routes", "authorize.ts");
-  let authorize = await readFile(authorizePath, "utf8");
+/**
+ * Adjustments to the CLI output that every generated OP needs, whatever it selected.
+ * Each one asserts its marker so a CLI upgrade that moves the ground under us fails the
+ * build instead of silently producing an OP that ignores the publisher's choices.
+ */
+function patchGeneratedSource(sources) {
   const marker = "    // Create authentication transaction";
-  if (!authorize.includes(marker)) throw new Error("generated authorize.ts does not contain the expected CLI marker");
-  authorize = authorize.replace(marker, `    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = validatedRequest.scope.filter((scope) => !allowedScopes.includes(scope));\n    if (unsupportedScopes.length > 0) {\n      return c.redirect(buildErrorRedirect(validatedRequest.redirectUri, 'invalid_scope', validatedRequest.state, 'Unsupported scope: ' + unsupportedScopes.join(' '), issuer));\n    }\n\n${marker}`);
-  await writeFile(authorizePath, authorize);
+  sources["routes/authorize.ts"] = replaceOnce(
+    sources["routes/authorize.ts"],
+    marker,
+    `    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = validatedRequest.scope.filter((scope) => !allowedScopes.includes(scope));\n    if (unsupportedScopes.length > 0) {\n      return c.redirect(buildErrorRedirect(validatedRequest.redirectUri, 'invalid_scope', validatedRequest.state, 'Unsupported scope: ' + unsupportedScopes.join(' '), issuer));\n    }\n\n${marker}`,
+    "generated authorize.ts",
+  );
 
-  const discoveryPath = path.join(providerDirectory, "routes", "discovery.ts");
-  let discovery = await readFile(discoveryPath, "utf8");
+  // offline_access drops out of the literal when the refresh-token feature is disabled.
   const scopeLiteral = /scopesSupported: \['openid', 'profile', 'email', 'address', 'phone'(?:, 'offline_access')?\],/;
-  if (!scopeLiteral.test(discovery)) throw new Error("generated discovery.ts does not contain the expected scopes marker");
-  discovery = discovery.replace(scopeLiteral, "scopesSupported: (c.get('allowedScopes') as string[] | undefined) ?? ['openid'],");
-  await writeFile(discoveryPath, discovery);
+  if (!scopeLiteral.test(sources["routes/discovery.ts"])) throw new Error("generated discovery.ts does not contain the expected scopes marker");
+  sources["routes/discovery.ts"] = sources["routes/discovery.ts"].replace(
+    scopeLiteral,
+    "scopesSupported: (c.get('allowedScopes') as string[] | undefined) ?? ['openid'],",
+  );
+
+  // The publisher's accounts live in the shared D1. Neither fixture path may ever mint a
+  // login: the CLI seeds a `testuser` account into both the JSON-backed and the
+  // in-memory user store, which would otherwise be a valid account on any OP that fell
+  // back to the generated defaults.
+  sources["store.ts"] = replaceOnce(
+    sources["store.ts"],
+    "function defaultUserFixture(username: string): StoredUser | undefined {",
+    "function defaultUserFixture(username: string): StoredUser | undefined {\n  // Publisher overlay: accounts come from the shared D1 only, never from a fixture.\n  if (username !== undefined) return undefined;",
+    "generated store.ts",
+  );
+  sources["store.ts"] = replaceOnce(
+    sources["store.ts"],
+    "  authenticate(username: string, password: string): (UserClaims & { password: string }) | undefined {",
+    "  authenticate(username: string, password: string): (UserClaims & { password: string }) | undefined {\n    // Publisher overlay: see defaultUserFixture above. The development fixtures this\n    // class seeds must never authenticate on a published OP.\n    if (username || password) return undefined;",
+    "generated store.ts",
+  );
 }
+
+/**
+ * Type-checks the D1 overlay against the store contract the CLI just generated, which is
+ * how a breaking change to JsonStoreBackend / ProviderStores / UserStorage surfaces at
+ * build time instead of as a runtime failure in a deployed OP.
+ *
+ * Scoped to persistence.ts on purpose: the CLI's own route files iterate URLSearchParams,
+ * which @cloudflare/workers-types does not type as iterable, so checking them here would
+ * only report noise about code we do not own.
+ */
+const GENERATED_TSCONFIG = {
+  compilerOptions: {
+    target: "ES2022",
+    module: "ESNext",
+    moduleResolution: "Bundler",
+    lib: ["ES2022", "WebWorker"],
+    types: ["@cloudflare/workers-types"],
+    strict: true,
+    noEmit: true,
+    skipLibCheck: true,
+  },
+  include: ["src/oidc-provider/persistence.ts"],
+};
 
 export async function generateOp(opId, configPath) {
   if (!OP_ID_PATTERN.test(opId)) throw new Error("invalid op_id");
@@ -177,21 +171,41 @@ export async function generateOp(opId, configPath) {
 
   const rootPackage = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"));
   const cliPackage = rootPackage.config?.maronnOidcCli;
-  if (typeof cliPackage !== "string" || !/^@maronn-oidc\/cli@\d+\.\d+\.\d+$/.test(cliPackage)) throw new Error("package.json config.maronnOidcCli must be an exact package version");
+  if (typeof cliPackage !== "string" || !/^@maronn-openid-connect\/cli@\d+\.\d+\.\d+$/.test(cliPackage)) throw new Error("package.json config.maronnOidcCli must be an exact package version");
   const catalog = await readExperimentalCatalog();
   const experimental = parseExperimentalSelection(config.experimental, catalog);
   const experimentalIds = Object.keys(experimental);
+
   const disabled = FEATURES.filter((name) => config.features[name] === false);
   const args = ["exec", "--yes", `--package=${cliPackage}`, "--", "maronn-oidc", "generate", "hono", "--output", providerDirectory];
   if (disabled.length > 0) args.push("--disable", disabled.join(","));
+  // Experimental features are off by default in the CLI and generated only on request.
+  if (experimentalIds.length > 0) args.push("--enable", experimentalIds.join(","));
   await execFile("npm", args, { cwd: ROOT, maxBuffer: 10 * 1024 * 1024 });
 
-  await cp(path.join(ROOT, "templates", "cloudflare", "store.ts"), path.join(providerDirectory, "store.ts"));
-  await cp(path.join(ROOT, "templates", "cloudflare", "resolvers.ts"), path.join(providerDirectory, "resolvers.ts"));
+  const patched = ["apply.ts", "store.ts", "routes/authorize.ts", "routes/discovery.ts", ...(experimentalIds.includes("par") ? ["routes/par.ts"] : [])];
+  const sources = Object.fromEntries(await Promise.all(
+    patched.map(async (file) => [file, await readFile(path.join(providerDirectory, file), "utf8")]),
+  ));
+  patchGeneratedSource(sources);
+  for (const id of experimentalIds) {
+    const wiring = EXPERIMENTAL_WIRING[id];
+    if (!wiring) throw new Error(`experimental feature ${JSON.stringify(id)} has no generator wiring; see docs/experimental.md`);
+    wiring.apply(sources, experimental[id]);
+  }
+  await Promise.all(Object.entries(sources).map(([file, content]) => writeFile(path.join(providerDirectory, file), content)));
+
   await cp(path.join(ROOT, "templates", "cloudflare", "persistence.ts"), path.join(providerDirectory, "persistence.ts"));
-  await cp(path.join(ROOT, "templates", "cloudflare", "index.ts"), path.join(sourceDirectory, "index.ts"));
-  await patchGeneratedSource(providerDirectory);
-  if (experimentalIds.length > 0) await applyExperimentalWiring(sourceDirectory, providerDirectory, experimental);
+  const entrypoint = replaceOnce(
+    await readFile(path.join(ROOT, "templates", "cloudflare", "index.ts"), "utf8"),
+    EXPERIMENTAL_CONFIG_LINE,
+    // Baked in rather than passed as a Worker binding: `required` and friends decide how
+    // strict the deployed OP is, and a binding can be edited or dropped after deployment.
+    EXPERIMENTAL_CONFIG_LINE.replace("= {};", `= ${JSON.stringify(experimental)};`),
+    "Cloudflare entrypoint template",
+  );
+  await writeFile(path.join(sourceDirectory, "index.ts"), entrypoint);
+  await writeFile(path.join(appDirectory, "tsconfig.json"), `${JSON.stringify(GENERATED_TSCONFIG, null, 2)}\n`);
 
   const metadata = {
     op_id: opId,
