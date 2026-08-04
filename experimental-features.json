@@ -1,6 +1,6 @@
 {
   "package": "@maronn-openid-connect/experimental",
-  "note": "@maronn-openid-connect/experimental の機能カタログ。ポータルUI・生成スクリプト・追従チェックが共通で参照する単一の情報源です。status が supported の機能だけがポータルUIに表示され、CLIの --enable へ渡されます。scripts/check-package-updates.mjs が新しいsubpath exportを見つけると status: detected として追記します（配線手順は docs/experimental.md）。",
+  "note": "@maronn-openid-connect/experimental の機能カタログ。ポータルUI・生成スクリプト・追従チェックが共通で参照する単一の情報源です。status が supported の機能だけがポータルUIに表示され、CLIの --enable へ渡されます。summary は作成画面にそのまま出る説明文、links は任意の参考リンク（外部URLなら url、このリポジトリ内のMarkdownなら doc）です。scripts/check-package-updates.mjs が新しいsubpath exportを見つけると status: detected として追記します（配線手順は docs/experimental.md、説明とリンクの書き方は docs/choices.md）。",
   "features": [
     {
       "id": "par",
@@ -9,6 +9,10 @@
       "label": "PAR（Pushed Authorization Requests）",
       "spec": "RFC 9126",
       "summary": "認可リクエストをバックチャネルで事前POSTし、返却された request_uri を /authorize に渡します。パラメータがブラウザのURLに載らず、改ざんもできません。",
+      "links": [
+        { "label": "RFC 9126", "url": "https://datatracker.ietf.org/doc/html/rfc9126" },
+        { "label": "このリポジトリでの実装メモ", "doc": "docs/experimental.md" }
+      ],
       "endpoints": ["POST /par"],
       "discovery": ["pushed_authorization_request_endpoint", "require_pushed_authorization_requests"],
       "options": [
@@ -27,6 +31,10 @@
       "label": "Token Exchange",
       "spec": "RFC 8693",
       "summary": "発行済みアクセストークンを subject_token として /token へ渡し、スコープを絞ったトークンへ交換します。専用エンドポイントは増えず、grant_type=urn:ietf:params:oauth:grant-type:token-exchange として動作します。",
+      "links": [
+        { "label": "RFC 8693", "url": "https://datatracker.ietf.org/doc/html/rfc8693" },
+        { "label": "このリポジトリでの実装メモ", "doc": "docs/experimental.md" }
+      ],
       "endpoints": ["POST /token (grant_type=urn:ietf:params:oauth:grant-type:token-exchange)"],
       "discovery": ["grant_types_supported"],
       "options": []
