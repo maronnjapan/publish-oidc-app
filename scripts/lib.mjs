@@ -37,8 +37,73 @@ export async function readInfra() {
 
 export const EXPERIMENTAL_CATALOG_PATH = path.join(ROOT, "experimental-features.json");
 export const OPTIONAL_CATALOG_PATH = path.join(ROOT, "optional-features.json");
+export const CHOICE_CATALOG_PATH = path.join(ROOT, "portal-choices.json");
 
 export const FEATURE_ID_PATTERN = /^[a-z][a-z0-9-]{0,30}$/;
+
+/** A one-line summary is a promise about the rendering: one sentence, one line, no markup. */
+const SUMMARY_MAX_LENGTH = 120;
+
+/**
+ * A reference attached to a selectable item. Links are optional everywhere, but a link that
+ * is written must resolve: either an absolute https URL or `doc`, a path to a Markdown file
+ * in this repository that the portal turns into a GitHub URL (see docs/choices.md).
+ */
+export function validateLinks(links, where) {
+  if (links === undefined) return [];
+  if (!Array.isArray(links)) throw new Error(`${where} links must be an array`);
+  for (const link of links) {
+    if (!link || typeof link.label !== "string" || link.label.trim() === "") throw new Error(`${where} link needs a label`);
+    const hasUrl = typeof link.url === "string" && link.url.length > 0;
+    const hasDoc = typeof link.doc === "string" && link.doc.length > 0;
+    if (hasUrl === hasDoc) throw new Error(`${where} link ${JSON.stringify(link.label)} needs exactly one of url or doc`);
+    if (hasUrl && !link.url.startsWith("https://")) throw new Error(`${where} link ${JSON.stringify(link.label)} must be an https URL`);
+    if (hasDoc && (link.doc.startsWith("/") || link.doc.includes(".."))) throw new Error(`${where} link ${JSON.stringify(link.label)} doc must be a path inside this repository`);
+  }
+  return links;
+}
+
+/**
+ * Single source of truth for the one-line summaries and reference links of the choices the
+ * portal offers itself: client type, scopes, and the CLI's default feature toggles. The two
+ * opt-in catalogs carry their own, in the same `summary` + `links` shape.
+ */
+export async function readChoiceCatalog() {
+  let catalog;
+  try {
+    catalog = JSON.parse(await readFile(CHOICE_CATALOG_PATH, "utf8"));
+  } catch (error) {
+    throw new Error(`unable to read portal-choices.json: ${error.message}`);
+  }
+  if (!Array.isArray(catalog?.groups)) throw new Error("portal-choices.json must contain a groups array");
+  const groupIds = new Set();
+  for (const group of catalog.groups) {
+    if (typeof group?.id !== "string" || !group.id) throw new Error("every choice group needs an id");
+    if (groupIds.has(group.id)) throw new Error(`choice group ${group.id} is declared twice`);
+    groupIds.add(group.id);
+    if (!Array.isArray(group.items) || group.items.length === 0) throw new Error(`choice group ${group.id} needs items`);
+    const itemIds = new Set();
+    for (const item of group.items) {
+      const where = `choice ${group.id}.${item?.id}`;
+      if (typeof item?.id !== "string" || !item.id) throw new Error(`every item of ${group.id} needs an id`);
+      if (itemIds.has(item.id)) throw new Error(`${where} is declared twice`);
+      itemIds.add(item.id);
+      if (typeof item.label !== "string" || !item.label) throw new Error(`${where} needs a label`);
+      if (typeof item.summary !== "string" || item.summary.trim() === "") throw new Error(`${where} needs a summary`);
+      if (/[\r\n]/.test(item.summary)) throw new Error(`${where} summary must stay on one line`);
+      if (item.summary.length > SUMMARY_MAX_LENGTH) throw new Error(`${where} summary must be ${SUMMARY_MAX_LENGTH} characters or fewer`);
+      validateLinks(item.links, where);
+    }
+  }
+  return catalog;
+}
+
+/** The items of one choice group, in display order. */
+export function choiceGroup(catalog, groupId) {
+  const group = catalog.groups.find((entry) => entry.id === groupId);
+  if (!group) throw new Error(`portal-choices.json has no group ${JSON.stringify(groupId)}`);
+  return group;
+}
 
 /**
  * The CLI ships feature toggles in three groups, and this repository follows all three:
@@ -62,6 +127,10 @@ async function readFeatureCatalog(catalogPath, kind) {
     }
     if (feature.status !== "supported" && feature.status !== "detected") {
       throw new Error(`${kind} feature ${feature.id} must be status supported or detected`);
+    }
+    validateLinks(feature.links, `${kind} feature ${feature.id}`);
+    for (const option of feature.options ?? []) {
+      validateLinks(option.links, `${kind} option ${feature.id}.${option?.id}`);
     }
   }
   return catalog;

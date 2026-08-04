@@ -228,6 +228,10 @@ step6() {
   4. PKCE等の機能
   5. UI入力またはCSVの1〜5ユーザー
 
+各選択項目には一行の概要が付き、リンクを設定した項目には仕様書などへのリンクも
+並びます。文言とリンクは portal-choices.json / optional-features.json /
+experimental-features.json で設定します（docs/choices.md）。
+
 必要なら「試験的な機能」（@maronn-openid-connect/experimental、PAR / RFC 9126 と
 Token Exchange / RFC 8693）も選べます。APIが安定しておらず他の機能より適切に
 動かない可能性が高いため、動作検証にのみ使ってください。詳細は

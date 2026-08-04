@@ -8,6 +8,7 @@ Web UIから設定ごとに独立したOpenID ProviderをCloudflare Workersへ�
 - 作成画面でリダイレクトURL、`openid`に加えるスコープ、`public`/`confidential`、PKCE・Refresh Token・Introspection・Revocation・Request Objectを選択
 - `@maronn-openid-connect/experimental`の試験的な機能（PAR / RFC 9126、Token Exchange / RFC 8693）を機能単位で選択（安定していない旨を作成画面と作成完了画面に明示）
 - CLI本体のオプション機能（既定で無効な安定機能。認可トランザクションのブラウザ束縛）を機能単位で選択（既定では折りたたみ表示）
+- 選択項目ごとに一行の概要を作成画面へ表示し、任意で仕様書やリポジトリ内ドキュメントへのリンクも表示（`portal-choices.json`ほかのカタログで設定）
 - 1〜5ユーザーを画面または`username,password`形式のCSVで登録
 - パスワードはSHA-256（個別salt）で共有D1へ保存
 - publicではOP URLとClient ID、confidentialでは加えてClient Secretをデプロイ完了後に一度だけ表示
@@ -94,6 +95,18 @@ bob,another-long-password
 
 Discoveryは各OPの`/.well-known/openid-configuration`、JWKSは`/.well-known/jwks.json`です。
 
+## 選択項目の説明とリンク
+
+作成画面の選択項目には、一行の概要と任意の参考リンクが付きます。文言もリンクもカタログJSONが単一の情報源で、UIコードは触りません。
+
+| 選択項目 | カタログ |
+|---|---|
+| クライアント種別・スコープ・OP機能 | `portal-choices.json` |
+| オプション機能 | `optional-features.json` |
+| 試験的な機能 | `experimental-features.json` |
+
+リンクは必須ではありません。付ける場合は外部URL（`"url": "https://..."`）か、このリポジトリ内のファイル（`"doc": "docs/experimental.md"`）を書きます。後者は`infra.json`の`github_owner`/`github_repo`から`https://github.com/<owner>/<repo>/blob/main/<path>`へ解決されるので、fork先ではfork側のドキュメントを指します。書き方と制約は[docs/choices.md](docs/choices.md)を参照してください。
+
 ## 試験的な機能
 
 作成画面の「試験的な機能」から`@maronn-openid-connect/experimental`の機能を選べます。選択内容はCLIの`--enable`へ渡され、選んだOPにだけ生成されます。選ばなければ生成コードはこのpackageを一切参照しません。
@@ -141,7 +154,7 @@ npm run build
 npm run check
 ```
 
-テストはポータル入力・CSV/UI、IP制限、資格情報の条件分岐、salt付きSHA-256、D1名前空間、CLI機能トグル、生成OPのWorkers bundleを検証します。生成物の`persistence.ts`はCLIが生成したストア契約に対して型検査され、契約が変わればCIで落ちます。experimentalについては、PARとToken Exchangeそれぞれを有効にしたOPを実際に生成・バンドルし、`POST /par`から`/token`までのフロー、`request_uri`の使い捨て（並行リクエスト含む）、必須モード、スコープ絞り込み交換まで通します。optionalについては、`transaction-binding`を有効にしたOPと無効なOPを生成し、Cookieを持つブラウザだけが認可コードを取得できること・他のトランザクションのCookieでは同意を代行できないことまで通します。あわせて固定CLIの`--help`を実行し、解釈できない見出しの分類が増えていないかも検査します。
+テストはポータル入力・CSV/UI、選択項目の説明とリンク、IP制限、資格情報の条件分岐、salt付きSHA-256、D1名前空間、CLI機能トグル、生成OPのWorkers bundleを検証します。生成物の`persistence.ts`はCLIが生成したストア契約に対して型検査され、契約が変わればCIで落ちます。experimentalについては、PARとToken Exchangeそれぞれを有効にしたOPを実際に生成・バンドルし、`POST /par`から`/token`までのフロー、`request_uri`の使い捨て（並行リクエスト含む）、必須モード、スコープ絞り込み交換まで通します。optionalについては、`transaction-binding`を有効にしたOPと無効なOPを生成し、Cookieを持つブラウザだけが認可コードを取得できること・他のトランザクションのCookieでは同意を代行できないことまで通します。あわせて固定CLIの`--help`を実行し、解釈できない見出しの分類が増えていないかも検査します。
 
 ## セキュリティと運用
 

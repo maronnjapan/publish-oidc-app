@@ -83,7 +83,7 @@ npm run check             # 更新後に必ず実行
 2. **生成物を読む。** `--enable <feature-id>` を付けて生成し、増えたファイル・設定オブジェクト・Discoveryメタデータを確認する。
 3. **必要なら永続化を足す。** 生成コードがin-memoryストアを持つ場合（PARの `parStore` のように）、`templates/cloudflare/persistence.ts` にD1版を実装し、`templates/cloudflare/index.ts` の middleware で context に入れる。`oidc_records` に新しい `kind` prefixを足せば、Reaperの `op_id` 単位削除にそのまま乗ります。
 4. **生成側に登録する。** `scripts/generate-op.mjs` の `EXPERIMENTAL_WIRING` にエントリを足す。ポータルから設定を渡す場合は `apply(sources, options)` の中で `replaceOnce` を使い、生成コードの設定オブジェクトを書き換える。クライアントの `grantTypes` に増やすべきgrantがあれば `clientGrantTypes`（`scripts/deploy-op.mjs`）も更新する。
-5. **カタログを仕上げる。** `experimental-features.json` の当該エントリを `status: "supported"` にし、`label` / `spec` / `summary` / `endpoints` / `options` を埋める。ポータルUIはこのカタログから生成されるので、UIコードの変更は不要です。**手順4より先に `supported` にしないこと**（ポータルは `supported` を無条件に出すため、配線が無いとユーザーの作成枠を消費したうえでCIで失敗します）。
+5. **カタログを仕上げる。** `experimental-features.json` の当該エントリを `status: "supported"` にし、`label` / `spec` / `summary` / `endpoints` / `options` を埋める。仕様書やこのドキュメントへのリンクを出したい場合は `links` も書く（任意。書き方は [docs/choices.md](choices.md)）。ポータルUIはこのカタログから生成されるので、UIコードの変更は不要です。**手順4より先に `supported` にしないこと**（ポータルは `supported` を無条件に出すため、配線が無いとユーザーの作成枠を消費したうえでCIで失敗します）。
 6. **テストを足す。** `test/experimental.test.mjs` に倣い、生成→バンドル→リクエストまで通すテストを書く。
 7. `npm run check` を通してからコミットする。
 

@@ -339,6 +339,9 @@ function catalogEntryForDetectedFeature(id, version) {
     label: `${id}（未配線）`,
     spec: "",
     summary: `@maronn-openid-connect/experimental@${version} が公開した新機能です。docs/experimental.md の手順で配線するとポータルで選択できるようになります。`,
+    // Filled in when the feature is wired up: a one-line summary and, if there is one,
+    // a link to the spec or to this repository's notes (docs/choices.md).
+    links: [],
     endpoints: [],
     detected_version: version,
   };
@@ -351,6 +354,7 @@ function optionalEntryForDetectedFeature(id, version) {
     label: `${id}（未配線）`,
     spec: "",
     summary: `@maronn-openid-connect/cli@${version} が --enable で受け付ける新しいオプション機能です。docs/optional-features.md の手順で配線するとポータルで選択できるようになります。`,
+    links: [],
     endpoints: [],
     options: [],
     detected_version: version,

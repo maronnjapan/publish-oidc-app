@@ -1,6 +1,6 @@
 {
   "package": "@maronn-openid-connect/cli",
-  "note": "CLI本体が持つ「デフォルト無効の安定機能」のカタログ。ポータルUI・生成スクリプト・追従チェックが共通で参照する単一の情報源です。experimentalと違い別packageは不要で、CLIの --enable だけで生成されます。status が supported の機能だけがポータルUIに表示されます。scripts/check-package-updates.mjs が maronn-oidc --help の \"Optional features (disabled by default):\" 行に新しいIDを見つけると status: detected として追記します（配線手順は docs/optional-features.md）。",
+  "note": "CLI本体が持つ「デフォルト無効の安定機能」のカタログ。ポータルUI・生成スクリプト・追従チェックが共通で参照する単一の情報源です。experimentalと違い別packageは不要で、CLIの --enable だけで生成されます。status が supported の機能だけがポータルUIに表示されます。summary は作成画面にそのまま出る説明文、links は任意の参考リンク（外部URLなら url、このリポジトリ内のMarkdownなら doc。書き方は docs/choices.md）です。scripts/check-package-updates.mjs が maronn-oidc --help の \"Optional features (disabled by default):\" 行に新しいIDを見つけると status: detected として追記します（配線手順は docs/optional-features.md）。",
   "features": [
     {
       "id": "transaction-binding",
@@ -8,6 +8,11 @@
       "label": "認可トランザクションのブラウザ束縛",
       "spec": "OIDC Core 1.0 §3.1.2.3 / §3.1.2.4",
       "summary": "/authorize がHttpOnly Cookieに秘密値を発行し、そのハッシュだけを認可トランザクションに保存します。/login と /consent は同じブラウザからの継続だけを受け付けるため、URLに載る transaction_id が漏れても第三者がログイン画面のCSRFトークンを読んだり、同意を代行して認可コードを受け取ったりできません。",
+      "links": [
+        { "label": "OIDC Core 1.0 §3.1.2.3", "url": "https://openid.net/specs/openid-connect-core-1_0.html#Authenticates" },
+        { "label": "OIDC Core 1.0 §3.1.2.4", "url": "https://openid.net/specs/openid-connect-core-1_0.html#Consent" },
+        { "label": "このリポジトリでの実装メモ", "doc": "docs/optional-features.md" }
+      ],
       "endpoints": [],
       "options": []
     }

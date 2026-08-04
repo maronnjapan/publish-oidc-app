@@ -1,4 +1,6 @@
+import choiceCatalog from "../../../portal-choices.json";
 import experimentalCatalog from "../../../experimental-features.json";
+import infra from "../../../infra.json";
 import optionalCatalog from "../../../optional-features.json";
 
 interface Env {
@@ -35,11 +37,23 @@ interface CreateInput {
   users: PortalUser[];
 }
 
+/**
+ * A reference for one selectable item. Both forms are optional and a choice may carry any
+ * number of them: `url` for an external document (a spec, usually), `doc` for a Markdown
+ * file in this repository. See docs/choices.md.
+ */
+interface ChoiceLink {
+  label: string;
+  url?: string;
+  doc?: string;
+}
+
 interface CatalogOption {
   id: string;
   label: string;
   default?: boolean;
   hint?: string;
+  links?: ChoiceLink[];
 }
 
 /** One entry of experimental-features.json or optional-features.json; the shape is shared. */
@@ -51,6 +65,23 @@ interface CatalogFeature {
   summary: string;
   endpoints: string[];
   options?: CatalogOption[];
+  links?: ChoiceLink[];
+}
+
+/** One entry of portal-choices.json: a checkbox or select option plus its one-line summary. */
+interface ChoiceItem {
+  id: string;
+  label: string;
+  summary: string;
+  default?: boolean;
+  required?: boolean;
+  links?: ChoiceLink[];
+}
+
+interface ChoiceGroup {
+  id: string;
+  label: string;
+  items: ChoiceItem[];
 }
 
 type FeatureSelection = Record<string, Record<string, boolean>>;
@@ -76,10 +107,68 @@ const EXPERIMENTAL_FEATURES: CatalogFeature[] = (experimentalCatalog.features as
 const OPTIONAL_FEATURES: CatalogFeature[] = (optionalCatalog.features as CatalogFeature[])
   .filter((feature) => feature.status === "supported");
 
+// Every selectable item's one-line summary and optional links. The ids here must match the
+// lists above (and the generator's); test/choices.test.mjs is what keeps them in step.
+const CHOICE_GROUPS: ChoiceGroup[] = choiceCatalog.groups as ChoiceGroup[];
+
+function choiceItems(groupId: string): ChoiceItem[] {
+  const group = CHOICE_GROUPS.find((entry) => entry.id === groupId);
+  if (!group) throw new Error(`portal-choices.json has no group ${JSON.stringify(groupId)}`);
+  return group.items;
+}
+
 const HTML_ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => HTML_ESCAPES[character]);
+}
+
+/**
+ * `doc` links name a file in this repository rather than a URL, so a fork's portal points
+ * at the fork's own copy: infra.json already carries the owner and repository the portal
+ * dispatches its workflow to.
+ */
+function linkHref(link: ChoiceLink): string | null {
+  if (typeof link.url === "string" && link.url.startsWith("https://")) return link.url;
+  if (typeof link.doc === "string" && link.doc.length > 0) return `https://github.com/${infra.github_owner}/${infra.github_repo}/blob/main/${link.doc}`;
+  return null;
+}
+
+/** Renders the references of one item. Links are optional, so this is often the empty string. */
+function linkList(links: ChoiceLink[] | undefined): string {
+  const anchors = (links ?? [])
+    .map((link) => ({ link, href: linkHref(link) }))
+    .filter((entry): entry is { link: ChoiceLink; href: string } => entry.href !== null)
+    .map((entry) => `<a href="${escapeHtml(entry.href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(entry.link.label)}</a>`);
+  return anchors.length === 0 ? "" : ` <span class="links">${anchors.join("・")}</span>`;
+}
+
+/**
+ * Renders one checkbox group from portal-choices.json. `group` is the class the inline
+ * script collects the selection with, so it doubles as the group id in the catalog.
+ * A `required` item is shown checked and disabled: the script adds it unconditionally.
+ */
+function choiceList(group: string, items: ChoiceItem[]): string {
+  return items.map((item) => {
+    const input = item.required
+      ? `<input type="checkbox" checked disabled>`
+      : `<input class="${group}" type="checkbox" value="${escapeHtml(item.id)}"${item.default ? " checked" : ""}>`;
+    return `
+        <div class="choice">
+          <label>${input} ${escapeHtml(item.label)}${item.required ? "（必須）" : ""}</label>
+          <p class="hint">${escapeHtml(item.summary)}${linkList(item.links)}</p>
+        </div>`;
+  }).join("");
+}
+
+/** The client type is a select, so its summaries sit under the field instead of per row. */
+function clientTypeOptions(): string {
+  return choiceItems("client-type").map((item) => `<option value="${escapeHtml(item.id)}"${item.default ? " selected" : ""}>${escapeHtml(item.label)}</option>`).join("");
+}
+
+function clientTypeNotes(): string {
+  return choiceItems("client-type").map((item) => `
+      <p class="hint"><strong>${escapeHtml(item.label)}</strong>: ${escapeHtml(item.summary)}${linkList(item.links)}</p>`).join("");
 }
 
 /**
@@ -91,8 +180,8 @@ function featureToggles(group: string, features: CatalogFeature[]): string {
   return features.map((feature) => {
     const options = (feature.options ?? []).map((option) => `
           <div class="feature-option-row">
-            <label><input class="${group}-option" type="checkbox" data-feature="${escapeHtml(feature.id)}" data-option="${escapeHtml(option.id)}"${option.default ? " checked" : ""} disabled> ${escapeHtml(option.label)}</label>${option.hint ? `
-            <p class="hint">${escapeHtml(option.hint)}</p>` : ""}
+            <label><input class="${group}-option" type="checkbox" data-feature="${escapeHtml(feature.id)}" data-option="${escapeHtml(option.id)}"${option.default ? " checked" : ""} disabled> ${escapeHtml(option.label)}</label>${option.hint || option.links ? `
+            <p class="hint">${escapeHtml(option.hint ?? "")}${linkList(option.links)}</p>` : ""}
           </div>`).join("");
     const endpoints = feature.endpoints.length > 0
       ? `
@@ -102,7 +191,7 @@ function featureToggles(group: string, features: CatalogFeature[]): string {
     return `
         <div class="opt-in-feature">
           <label class="opt-in-toggle"><input class="${group}-toggle-input" type="checkbox" value="${escapeHtml(feature.id)}" data-label="${escapeHtml(feature.label)}" data-endpoints="${escapeHtml(feature.endpoints.join(" / "))}"> ${escapeHtml(feature.label)}</label>
-          <p class="hint">${escapeHtml(feature.spec)} — ${escapeHtml(feature.summary)}</p>${endpoints}${options}
+          <p class="hint">${escapeHtml(feature.spec)} — ${escapeHtml(feature.summary)}${linkList(feature.links)}</p>${endpoints}${options}
         </div>`;
   }).join("");
 }
@@ -159,7 +248,13 @@ const HTML = String.raw`<!doctype html>
     fieldset { margin: 0; padding: 0; border: 0; }
     .choices { display: flex; flex-wrap: wrap; gap: .65rem 1.1rem; margin-top: .7rem; }
     .choices label { font-weight: 500; }
+    .choice { padding: .65rem 0 0; margin-top: .65rem; border-top: 1px solid #e6ebf2; }
+    .choice:first-of-type { margin-top: .7rem; padding-top: 0; border-top: 0; }
+    .choice > label { display: block; font-weight: 500; }
+    .choice > .hint { margin-left: 1.5rem; }
     .hint { margin: .35rem 0 0; color: #52627a; font-size: .9rem; }
+    .hint a { color: #165dcc; }
+    .links a { white-space: nowrap; }
     .section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
     .section-heading h2 { margin-bottom: 0; }
     .count { color: #52627a; font-size: .9rem; font-weight: 700; }
@@ -207,34 +302,20 @@ const HTML = String.raw`<!doctype html>
       <div class="grid">
         <div><label class="block" for="name">表示名（任意）</label><input id="name" maxlength="40" autocomplete="off"></div>
         <div><label class="block" for="redirect-url">ログイン後のリダイレクトURL</label><input id="redirect-url" type="url" required placeholder="https://example.com/callback"></div>
-        <div><label class="block" for="client-type">クライアント種別</label><select id="client-type"><option value="public">public</option><option value="confidential">confidential</option></select></div>
+        <div><label class="block" for="client-type">クライアント種別</label><select id="client-type">${clientTypeOptions()}</select></div>
         <div><label class="block">テンプレート</label><input value="Hono（固定）" disabled></div>
-      </div>
+      </div>${clientTypeNotes()}
       <p class="hint">クライアントIDは自動発行されます。confidentialではクライアントシークレットも作成完了後に一度だけ表示します。</p>
       <p class="hint">リダイレクトURLはhttps（localhostと127.0.0.1のみhttp可）で指定し、#以降のフラグメントは含められません。表示名は40文字以内で日本語も使えます。</p>
     </section>
 
     <section class="card">
-      <fieldset><legend>スコープ</legend>
-        <div class="choices"><label><input type="checkbox" checked disabled> openid（必須）</label>
-          <label><input class="scope" type="checkbox" value="profile"> profile</label>
-          <label><input class="scope" type="checkbox" value="email"> email</label>
-          <label><input class="scope" type="checkbox" value="address"> address</label>
-          <label><input class="scope" type="checkbox" value="phone"> phone</label>
-          <label><input class="scope" type="checkbox" value="offline_access"> offline_access</label>
-        </div>
+      <fieldset><legend>スコープ</legend>${choiceList("scope", choiceItems("scope"))}
       </fieldset>
     </section>
 
     <section class="card">
-      <fieldset><legend>OP機能</legend>
-        <div class="choices">
-          <label><input class="feature" type="checkbox" value="pkce" checked> PKCE</label>
-          <label><input class="feature" type="checkbox" value="refresh-token" checked> Refresh Token</label>
-          <label><input class="feature" type="checkbox" value="introspection" checked> Introspection</label>
-          <label><input class="feature" type="checkbox" value="revocation" checked> Revocation</label>
-          <label><input class="feature" type="checkbox" value="request-object" checked> Request Object</label>
-        </div>
+      <fieldset><legend>OP機能</legend>${choiceList("feature", choiceItems("feature"))}
         <p class="hint">publicクライアントはライブラリの安全ポリシーにより、PKCE設定をオフにしてもPKCEが必須です。</p>
       </fieldset>
     </section>
@@ -807,4 +888,4 @@ async function route(request: Request, env: Env): Promise<Response> {
 
 export default { async fetch(request: Request, env: Env): Promise<Response> { try { return await route(request, env); } catch (error) { console.error("portal request failed", error); return errorResponse("internal_error", "an internal error occurred", 500); } } } satisfies ExportedHandler<Env>;
 
-export { HTML, allocateOpId, applyRateLimit, hashPassword, ipKey, parseInput, retryAfterUtcMidnight, route, validateInput, validateRedirectUrl };
+export { CHOICE_GROUPS, FEATURE_NAMES, HTML, OPTIONAL_SCOPES, allocateOpId, applyRateLimit, choiceItems, hashPassword, ipKey, linkHref, parseInput, retryAfterUtcMidnight, route, validateInput, validateRedirectUrl };

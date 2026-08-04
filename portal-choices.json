@@ -1,0 +1,136 @@
+{
+  "note": "作成画面で選択する項目（クライアント種別・スコープ・OP機能）の一行説明と参考リンクの単一の情報源です。ポータルUIはこのファイルから描画するので、説明やリンクの追加・修正はここだけで完結します。links は任意です。外部の仕様書などへ張るときは url、このリポジトリ内のMarkdownへ張るときは doc を書き、doc は infra.json の github_owner / github_repo を使って main ブランチのGitHub URLへ解決されます。ID一覧はポータル・生成スクリプト・追従チェックが持つ配列と一致している必要があり、test/choices.test.mjs が検査します（詳細は docs/choices.md）。",
+  "groups": [
+    {
+      "id": "client-type",
+      "label": "クライアント種別",
+      "items": [
+        {
+          "id": "public",
+          "label": "public",
+          "default": true,
+          "summary": "シークレットを秘密にできないSPAやモバイルアプリ向けで、Client Secretは発行せずPKCEで認可コードを守ります。",
+          "links": [
+            { "label": "RFC 6749 §2.1", "url": "https://datatracker.ietf.org/doc/html/rfc6749#section-2.1" }
+          ]
+        },
+        {
+          "id": "confidential",
+          "label": "confidential",
+          "summary": "サーバー側でシークレットを保持できるアプリ向けで、Client Secretを発行し client_secret_post でトークンを取得します。",
+          "links": [
+            { "label": "RFC 6749 §2.1", "url": "https://datatracker.ietf.org/doc/html/rfc6749#section-2.1" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "scope",
+      "label": "スコープ",
+      "items": [
+        {
+          "id": "openid",
+          "label": "openid",
+          "required": true,
+          "summary": "OpenID Connectとして扱うための必須スコープで、これがある場合だけID Tokenが発行されます。",
+          "links": [
+            { "label": "OIDC Core 1.0 §3.1.2.1", "url": "https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest" }
+          ]
+        },
+        {
+          "id": "profile",
+          "label": "profile",
+          "summary": "name や preferred_username などの基本プロフィールclaimをUserInfoとID Tokenで受け取れるようにします。",
+          "links": [
+            { "label": "OIDC Core 1.0 §5.4", "url": "https://openid.net/specs/openid-connect-core-1_0.html#ScopeClaims" }
+          ]
+        },
+        {
+          "id": "email",
+          "label": "email",
+          "summary": "email と email_verified のclaimを要求します（登録ユーザーに値が無ければ返りません）。",
+          "links": [
+            { "label": "OIDC Core 1.0 §5.4", "url": "https://openid.net/specs/openid-connect-core-1_0.html#ScopeClaims" }
+          ]
+        },
+        {
+          "id": "address",
+          "label": "address",
+          "summary": "住所を表す構造化claim address を要求します。",
+          "links": [
+            { "label": "OIDC Core 1.0 §5.1.1", "url": "https://openid.net/specs/openid-connect-core-1_0.html#AddressClaim" }
+          ]
+        },
+        {
+          "id": "phone",
+          "label": "phone",
+          "summary": "phone_number と phone_number_verified のclaimを要求します。",
+          "links": [
+            { "label": "OIDC Core 1.0 §5.4", "url": "https://openid.net/specs/openid-connect-core-1_0.html#ScopeClaims" }
+          ]
+        },
+        {
+          "id": "offline_access",
+          "label": "offline_access",
+          "summary": "ユーザーが居ない間もトークンを更新できるようRefresh Tokenを要求します（下のRefresh Token機能が必要です）。",
+          "links": [
+            { "label": "OIDC Core 1.0 §11", "url": "https://openid.net/specs/openid-connect-core-1_0.html#OfflineAccess" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "feature",
+      "label": "OP機能",
+      "items": [
+        {
+          "id": "pkce",
+          "label": "PKCE",
+          "default": true,
+          "summary": "code_verifier と code_challenge を使い、横取りされた認可コードを他者が使えないようにします。",
+          "links": [
+            { "label": "RFC 7636", "url": "https://datatracker.ietf.org/doc/html/rfc7636" }
+          ]
+        },
+        {
+          "id": "refresh-token",
+          "label": "Refresh Token",
+          "default": true,
+          "summary": "/token がRefresh Tokenも発行し、再ログインなしでアクセストークンを更新できるようにします。",
+          "links": [
+            { "label": "RFC 6749 §6", "url": "https://datatracker.ietf.org/doc/html/rfc6749#section-6" },
+            { "label": "OIDC Core 1.0 §12", "url": "https://openid.net/specs/openid-connect-core-1_0.html#RefreshTokens" }
+          ]
+        },
+        {
+          "id": "introspection",
+          "label": "Introspection",
+          "default": true,
+          "summary": "トークンが有効かとその属性をリソースサーバーが問い合わせる POST /introspect を追加します。",
+          "links": [
+            { "label": "RFC 7662", "url": "https://datatracker.ietf.org/doc/html/rfc7662" }
+          ]
+        },
+        {
+          "id": "revocation",
+          "label": "Revocation",
+          "default": true,
+          "summary": "発行済みのアクセストークンやRefresh Tokenを失効させる POST /revoke を追加します。",
+          "links": [
+            { "label": "RFC 7009", "url": "https://datatracker.ietf.org/doc/html/rfc7009" }
+          ]
+        },
+        {
+          "id": "request-object",
+          "label": "Request Object",
+          "default": true,
+          "summary": "認可リクエストのパラメータをJWT（request / request_uri）でまとめて渡せるようにします。",
+          "links": [
+            { "label": "OIDC Core 1.0 §6", "url": "https://openid.net/specs/openid-connect-core-1_0.html#JWTRequests" },
+            { "label": "RFC 9101", "url": "https://datatracker.ietf.org/doc/html/rfc9101" }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -4,7 +4,7 @@
 
 | 分類 | `--help` の見出し | 既定 | 実装元 | カタログ |
 |---|---|---|---|---|
-| 標準機能 | `Features (all enabled by default):` | 有効 | CLI | なし（`FEATURE_NAMES` / `FEATURES` に直接列挙） |
+| 標準機能 | `Features (all enabled by default):` | 有効 | CLI | ID一覧は `FEATURE_NAMES` / `FEATURES` に直接列挙。説明とリンクだけ `portal-choices.json`（[docs/choices.md](choices.md)） |
 | **オプション機能** | `Optional features (disabled by default):` | 無効 | CLI | `optional-features.json` |
 | 試験的な機能 | `Experimental features (disabled by default):` | 無効 | `@maronn-openid-connect/experimental` | `experimental-features.json` |
 
@@ -55,7 +55,7 @@
 
 4. **生成側に登録する。** `scripts/generate-op.mjs` の `OPTIONAL_WIRING` にエントリを足します。生成コードに手を入れる必要がなければ `apply() {}` のままで構いません（エントリ自体は必須です。無いと生成時に例外になります）。ポータルから設定を渡す場合は `apply(sources, options)` の中で `replaceOnce` を使って生成コードの設定オブジェクトを書き換えます。クライアントの `grantTypes` に増やすべきgrantがあれば `clientGrantTypes`（`scripts/deploy-op.mjs`）も更新してください。
 
-5. **カタログを仕上げる。** `optional-features.json` の当該エントリを `status: "supported"` にし、`label` / `spec` / `summary` / `endpoints` / `options` を埋めます。ポータルUIはこのカタログから生成されるのでUIコードの変更は不要です。**手順4より先に `supported` にしないこと**（ポータルは `supported` を無条件に出すため、配線が無いとユーザーの作成枠を消費したうえでCIで失敗します）。
+5. **カタログを仕上げる。** `optional-features.json` の当該エントリを `status: "supported"` にし、`label` / `spec` / `summary` / `endpoints` / `options` を埋めます。仕様書やこのドキュメントへのリンクを出したい場合は `links` も書きます（任意。書き方は [docs/choices.md](choices.md)）。ポータルUIはこのカタログから生成されるのでUIコードの変更は不要です。**手順4より先に `supported` にしないこと**（ポータルは `supported` を無条件に出すため、配線が無いとユーザーの作成枠を消費したうえでCIで失敗します）。
 
 6. **テストを足す。** `test/optional.test.mjs` に倣い、生成→バンドル→リクエストまで通すテストを書きます。堅牢化機能なら「無効なら通る／有効なら止まる」の両方を書いてください。
 
