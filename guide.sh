@@ -233,6 +233,11 @@ Token Exchange / RFC 8693）も選べます。APIが安定しておらず他の�
 動かない可能性が高いため、動作検証にのみ使ってください。詳細は
 docs/experimental.md を参照してください。
 
+折りたたまれている「オプション機能」は、CLIが既定で無効にしている安定機能です
+（認可トランザクションのブラウザ束縛）。仕様が要求していない堅牢化なので既定では
+無効ですが、試験的な機能とは違い動作は安定しています。詳細は
+docs/optional-features.md を参照してください。
+
 完了後、publicならOP URLとClient ID、confidentialなら加えてClient Secretが
 一度だけ表示されます。OP URLの /.well-known/openid-configuration も確認します。
 発行したOP Workerとその共有D1データは、デプロイから約24時間後（cron間隔を含め

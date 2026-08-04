@@ -279,3 +279,48 @@ test("the experimental selection reaches the deployment config", async () => {
     assert.deepEqual(JSON.parse([...DB.requests.values()][0].config_json).experimental, { par: { required: true } });
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("the UI offers every supported optional feature, folded away by default", async () => {
+  const catalog = JSON.parse(await readFile("optional-features.json", "utf8"));
+  const supported = catalog.features.filter((feature) => feature.status === "supported");
+  assert.ok(supported.length > 0);
+  for (const feature of supported) {
+    assert.match(HTML, new RegExp(`class="optional-toggle-input" type="checkbox" value="${feature.id}"`));
+    for (const option of feature.options ?? []) assert.match(HTML, new RegExp(`data-feature="${feature.id}" data-option="${option.id}"`));
+  }
+  for (const detected of catalog.features.filter((feature) => feature.status !== "supported")) {
+    assert.doesNotMatch(HTML, new RegExp(`value="${detected.id}" data-label=`), "features that are not wired up must not be selectable");
+  }
+  // Collapsed, not hidden: <details> without `open` keeps the toggles out of the way of
+  // the people who will never set them, while staying one click from anyone who will.
+  assert.match(HTML, /<details class="optional">/);
+  assert.doesNotMatch(HTML, /<details class="optional" open>/);
+  assert.match(HTML, /<summary>オプション機能（デフォルト無効/);
+  // The section must not borrow the experimental warning: these are stable features.
+  assert.doesNotMatch(HTML.slice(HTML.indexOf('<details class="optional">'), HTML.indexOf("</details>")), /他の機能より適切に動作しない/);
+});
+
+test("optional selections are validated against the catalog", () => {
+  assert.deepEqual(parseInput(createBody()).value.optional, {});
+  assert.deepEqual(parseInput({ ...createBody(), optional: { "transaction-binding": {} } }).value.optional, { "transaction-binding": {} });
+  assert.match(parseInput({ ...createBody(), optional: { unknown: {} } }).message, /optional feature "unknown"/);
+  assert.match(parseInput({ ...createBody(), optional: { "transaction-binding": { nope: true } } }).message, /optional option "transaction-binding.nope"/);
+  assert.match(parseInput({ ...createBody(), optional: [] }).message, /optional must be an object/);
+  // The two groups feed one --enable list but are validated separately, so an id may not
+  // cross over: asking for an experimental feature in the optional field is a rejection.
+  assert.match(parseInput({ ...createBody(), optional: { par: {} } }).message, /optional feature "par"/);
+  assert.match(parseInput({ ...createBody(), experimental: { "transaction-binding": {} } }).message, /experimental feature "transaction-binding"/);
+});
+
+test("the optional selection reaches the deployment config", async () => {
+  const DB = new MockDatabase();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 204 });
+  try {
+    const response = await route(createRequest({ ...createBody(), optional: { "transaction-binding": {} } }), env(DB));
+    assert.equal(response.status, 202);
+    const stored = JSON.parse([...DB.requests.values()][0].config_json);
+    assert.deepEqual(stored.optional, { "transaction-binding": {} });
+    assert.deepEqual(stored.experimental, {});
+  } finally { globalThis.fetch = originalFetch; }
+});

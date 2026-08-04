@@ -6,23 +6,24 @@
 //   node scripts/check-package-updates.mjs --apply      also bump the pins and the catalog
 //   node scripts/check-package-updates.mjs --report r.md write the markdown report to a file
 //
-// Reporting covers three questions:
+// Reporting covers four questions:
 //   1. is a newer version published?
 //   2. does @maronn-openid-connect/experimental export a feature the catalog does not know about?
-//   3. did the CLI's own feature toggles change?
-// Newly discovered experimental features are recorded as status "detected"; wiring them
-// up so the portal can offer them is a code change described in docs/experimental.md.
+//   3. does the CLI offer an opt-in "optional" feature the catalog does not know about?
+//   4. did the CLI's default feature toggles change?
+// Newly discovered opt-in features are recorded as status "detected" in their catalog;
+// wiring them up so the portal can offer them is a code change described in
+// docs/experimental.md and docs/optional-features.md.
 
 import { execFile as execFileCallback } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
-import { EXPERIMENTAL_CATALOG_PATH, ROOT, readExperimentalCatalog } from "./lib.mjs";
+import { EXPERIMENTAL_CATALOG_PATH, FEATURE_ID_PATTERN, OPTIONAL_CATALOG_PATH, ROOT, readExperimentalCatalog, readOptionalCatalog } from "./lib.mjs";
 
 const execFile = promisify(execFileCallback);
 const REGISTRY = (process.env.NPM_CONFIG_REGISTRY || "https://registry.npmjs.org").replace(/\/$/, "");
-const FEATURE_ID_PATTERN = /^[a-z][a-z0-9-]{0,30}$/;
 
 const TRACKED_PACKAGES = [
   { name: "@maronn-openid-connect/cli", configKey: "maronnOidcCli", dependencyField: "devDependencies" },
@@ -122,32 +123,77 @@ function parseFeatureList(line) {
 }
 
 /**
- * The CLI prints both toggle lists in --help, which is the only published surface for
- * them. The experimental list is what gates whether a catalog entry can be generated at
- * all, so a catalog id the CLI does not know is worth reporting.
+ * The CLI prints every toggle list in --help, which is the only published surface for
+ * them. Each list gates whether a catalog entry can be generated at all, so a catalog id
+ * the CLI does not know is worth reporting.
+ *
+ * A missing section means "this CLI has none", not "parsing failed" — only the default
+ * feature line is required, because a CLI that cannot even report that is one whose help
+ * output we no longer understand. New sections the CLI may grow later are invisible here
+ * by construction, so `sections` also carries the raw group headings: an unrecognised
+ * heading is reported rather than silently dropped, which is how the third group
+ * ("Optional features") went unnoticed when it first appeared.
  */
+const HELP_SECTIONS = {
+  features: /^Features \(all enabled by default\):[^\S\n]*(.+)$/m,
+  optional: /^Optional features \(disabled by default\):[^\S\n]*(.+)$/m,
+  experimental: /^Experimental features \(disabled by default\):[^\S\n]*(.+)$/m,
+};
+
+/** Every top-level "<name> (<qualifier>):" heading the help text prints, heading only. */
+export function helpGroupHeadings(helpText) {
+  return [...helpText.matchAll(/^([A-Za-z][A-Za-z ]*\([^)\n]*\)):/gm)].map((match) => match[1]);
+}
+
+/** Headings that no HELP_SECTIONS pattern claims, i.e. toggle groups this repository ignores. */
+export function unknownHelpHeadings(helpText) {
+  const known = Object.values(HELP_SECTIONS);
+  return helpGroupHeadings(helpText).filter((heading) => !known.some((pattern) => pattern.test(`${heading}: x`)));
+}
+
 async function cliFeatures(version) {
+  let stdout;
   try {
-    const { stdout } = await execFile(
+    ({ stdout } = await execFile(
       "npm",
       ["exec", "--yes", `--package=@maronn-openid-connect/cli@${version}`, "--", "maronn-oidc", "--help"],
       { cwd: ROOT, maxBuffer: 4 * 1024 * 1024, timeout: 180_000 },
-    );
-    const standard = stdout.match(/Features \(all enabled by default\):\s*(.+)/);
-    if (!standard) return null;
-    const experimental = stdout.match(/Experimental features \(disabled by default\):\s*(.+)/);
-    return {
-      features: parseFeatureList(standard[1]),
-      experimental: experimental ? parseFeatureList(experimental[1]) : [],
-    };
+    ));
   } catch {
     return null;
   }
+  const standard = stdout.match(HELP_SECTIONS.features);
+  if (!standard) return null;
+  const optional = stdout.match(HELP_SECTIONS.optional);
+  const experimental = stdout.match(HELP_SECTIONS.experimental);
+  return {
+    features: parseFeatureList(standard[1]),
+    optional: optional ? parseFeatureList(optional[1]) : [],
+    experimental: experimental ? parseFeatureList(experimental[1]) : [],
+    unknownSections: unknownHelpHeadings(stdout),
+  };
+}
+
+/**
+ * Compares one opt-in catalog against the ids the CLI says it can generate. Shared by the
+ * optional and experimental groups so a new group only needs a catalog file.
+ */
+export function compareCatalogToCli(catalog, cliIds) {
+  const catalogIds = catalog.features.map((feature) => feature.id);
+  return {
+    published: cliIds,
+    added: cliIds.filter((id) => !catalogIds.includes(id)),
+    unwired: catalog.features.filter((feature) => feature.status === "detected").map((feature) => feature.id),
+    // A catalog entry the CLI cannot generate is unusable: the portal offers `supported`
+    // unconditionally, so leaving it there burns a caller's daily quota and then fails.
+    ungeneratable: catalog.features.filter((feature) => feature.status === "supported" && !cliIds.includes(feature.id)).map((feature) => feature.id),
+  };
 }
 
 export async function collectReport({ inspectCliFeatures = true } = {}) {
   const rootPackage = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"));
   const catalog = await readExperimentalCatalog();
+  const optionalCatalog = await readOptionalCatalog();
   const packages = [];
   let experimentalManifest = null;
 
@@ -188,20 +234,37 @@ export async function collectReport({ inspectCliFeatures = true } = {}) {
   const cli = {
     latest: cliPackage.latest,
     features: toggles?.features ?? null,
+    optional: toggles?.optional ?? null,
     experimental: toggles?.experimental ?? null,
     added: toggles ? toggles.features.filter((feature) => !KNOWN_CLI_FEATURES.includes(feature)) : [],
     removed: toggles ? KNOWN_CLI_FEATURES.filter((feature) => !toggles.features.includes(feature)) : [],
     // A catalog entry the CLI cannot generate is unusable, whatever the package exports.
-    ungeneratable: toggles ? catalog.features.filter((feature) => feature.status === "supported" && !toggles.experimental.includes(feature.id)).map((feature) => feature.id) : [],
+    ungeneratable: toggles ? compareCatalogToCli(catalog, toggles.experimental).ungeneratable : [],
+    // Groups the CLI grew that none of HELP_SECTIONS claims. Reported rather than ignored:
+    // an unread group is a feature the portal will never learn it could offer.
+    unknownSections: toggles?.unknownSections ?? [],
   };
 
+  // The CLI's own opt-in features. Unlike experimental there is no package to inspect —
+  // --help is the whole published surface — so this block is null under --skip-cli-features.
+  const optional = toggles
+    ? {
+        ...compareCatalogToCli(optionalCatalog, toggles.optional),
+        // The CLI is the only source, so an id it no longer lists is gone for good —
+        // there is no separate package that could still be exporting it.
+        removed: optionalCatalog.features.map((feature) => feature.id).filter((id) => !toggles.optional.includes(id)),
+      }
+    : null;
+
+  const optionalWork = optional ? optional.added.length + optional.removed.length + optional.unwired.length : 0;
   return {
     checkedAt: new Date().toISOString(),
     packages,
     experimental,
+    optional,
     cli,
     hasUpdates: packages.some((entry) => entry.hasUpdate),
-    hasCatalogWork: experimental.added.length > 0 || experimental.removed.length > 0 || cli.added.length > 0 || cli.removed.length > 0 || cli.ungeneratable.length > 0,
+    hasCatalogWork: experimental.added.length > 0 || experimental.removed.length > 0 || cli.added.length > 0 || cli.removed.length > 0 || cli.ungeneratable.length > 0 || cli.unknownSections.length > 0 || optionalWork > 0,
   };
 }
 
@@ -232,18 +295,39 @@ export function renderReport(report) {
   }
   lines.push("");
 
+  lines.push("### オプション機能（CLI本体・デフォルト無効）");
+  if (!report.optional) {
+    lines.push("- `maronn-oidc --help` を読んでいないため判定できません（`--skip-cli-features`）。");
+  } else {
+    lines.push(`- 公開中: ${report.optional.published.map((id) => `\`${id}\``).join(", ") || "（なし）"}`);
+    if (report.optional.added.length > 0) {
+      lines.push(`- **新機能: ${report.optional.added.map((id) => `\`${id}\``).join(", ")}** — \`npm run packages:update\` で \`optional-features.json\` に \`status: "detected"\` として追記されます。ポータルで選択できるようにするには \`docs/optional-features.md\` の配線手順が必要です。`);
+    }
+    if (report.optional.removed.length > 0) {
+      lines.push(`- **削除された機能: ${report.optional.removed.map((id) => `\`${id}\``).join(", ")}** — 最新CLIの \`--enable\` が受け付けません。\`optional-features.json\` と \`OPTIONAL_WIRING\` から外してください。`);
+    }
+    if (report.optional.unwired.length > 0) {
+      lines.push(`- 未配線のまま残っている機能: ${report.optional.unwired.map((id) => `\`${id}\``).join(", ")}`);
+    }
+  }
+  lines.push("");
+
   lines.push("### CLI 機能トグル");
   if (!report.cli.features) {
     lines.push("- `maronn-oidc --help` からトグル一覧を取得できませんでした。手動で確認してください。");
   } else {
     lines.push(`- 最新CLIのトグル: ${report.cli.features.map((feature) => `\`${feature}\``).join(", ")}`);
+    lines.push(`- 最新CLIのoptionalトグル: ${(report.cli.optional ?? []).map((feature) => `\`${feature}\``).join(", ") || "（なし）"}`);
     lines.push(`- 最新CLIのexperimentalトグル: ${(report.cli.experimental ?? []).map((feature) => `\`${feature}\``).join(", ") || "（なし）"}`);
     if (report.cli.added.length > 0) lines.push(`- **未対応のトグル: ${report.cli.added.map((feature) => `\`${feature}\``).join(", ")}** — ポータルの \`FEATURE_NAMES\` と生成/デプロイの \`FEATURES\` に追加してください。`);
     if (report.cli.removed.length > 0) lines.push(`- **廃止されたトグル: ${report.cli.removed.map((feature) => `\`${feature}\``).join(", ")}** — 参照を削除してください。`);
     if (report.cli.ungeneratable.length > 0) lines.push(`- **CLIが生成できないカタログ項目: ${report.cli.ungeneratable.map((feature) => `\`${feature}\``).join(", ")}** — カタログでは supported ですが最新CLIの \`--enable\` が受け付けません。カタログを \`detected\` へ戻すか、CLIの更新を待ってください。`);
+    if (report.cli.unknownSections.length > 0) {
+      lines.push(`- **未知のトグル分類: ${report.cli.unknownSections.map((heading) => `\`${heading}\``).join(", ")}** — \`--help\` にこのリポジトリが解釈していない見出しがあります。新しいカテゴリなら \`scripts/check-package-updates.mjs\` の \`HELP_SECTIONS\` に追加し、対応するカタログと配線を用意してください。`);
+    }
   }
   lines.push("");
-  lines.push("バージョンを上げたら `npm run check` を実行してください。`test/experimental.test.mjs` が各experimental機能を実際に生成・バンドルして検証します。");
+  lines.push("バージョンを上げたら `npm run check` を実行してください。`test/experimental.test.mjs` と `test/optional.test.mjs` が各opt-in機能を実際に生成・バンドルして検証します。");
   return `${lines.join("\n")}\n`;
 }
 
@@ -256,6 +340,19 @@ function catalogEntryForDetectedFeature(id, version) {
     spec: "",
     summary: `@maronn-openid-connect/experimental@${version} が公開した新機能です。docs/experimental.md の手順で配線するとポータルで選択できるようになります。`,
     endpoints: [],
+    detected_version: version,
+  };
+}
+
+function optionalEntryForDetectedFeature(id, version) {
+  return {
+    id,
+    status: "detected",
+    label: `${id}（未配線）`,
+    spec: "",
+    summary: `@maronn-openid-connect/cli@${version} が --enable で受け付ける新しいオプション機能です。docs/optional-features.md の手順で配線するとポータルで選択できるようになります。`,
+    endpoints: [],
+    options: [],
     detected_version: version,
   };
 }
@@ -283,6 +380,18 @@ export async function applyUpdates(report) {
       applied.push(`experimental-features.json += ${id} (status: detected)`);
     }
     await writeFile(EXPERIMENTAL_CATALOG_PATH, `${JSON.stringify(catalog, null, 2)}\n`);
+  }
+
+  // Only reachable when --help was read: the CLI is the sole source for this group, so
+  // `--skip-cli-features` leaves report.optional null and nothing is recorded.
+  if (report.optional?.added.length > 0) {
+    const cliVersion = report.packages.find((entry) => entry.name === "@maronn-openid-connect/cli").latest;
+    const catalog = JSON.parse(await readFile(OPTIONAL_CATALOG_PATH, "utf8"));
+    for (const id of report.optional.added) {
+      catalog.features.push(optionalEntryForDetectedFeature(id, cliVersion));
+      applied.push(`optional-features.json += ${id} (status: detected)`);
+    }
+    await writeFile(OPTIONAL_CATALOG_PATH, `${JSON.stringify(catalog, null, 2)}\n`);
   }
 
   if (applied.length > 0) {

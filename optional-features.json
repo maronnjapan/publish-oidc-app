@@ -1,0 +1,15 @@
+{
+  "package": "@maronn-openid-connect/cli",
+  "note": "CLI本体が持つ「デフォルト無効の安定機能」のカタログ。ポータルUI・生成スクリプト・追従チェックが共通で参照する単一の情報源です。experimentalと違い別packageは不要で、CLIの --enable だけで生成されます。status が supported の機能だけがポータルUIに表示されます。scripts/check-package-updates.mjs が maronn-oidc --help の \"Optional features (disabled by default):\" 行に新しいIDを見つけると status: detected として追記します（配線手順は docs/optional-features.md）。",
+  "features": [
+    {
+      "id": "transaction-binding",
+      "status": "supported",
+      "label": "認可トランザクションのブラウザ束縛",
+      "spec": "OIDC Core 1.0 §3.1.2.3 / §3.1.2.4",
+      "summary": "/authorize がHttpOnly Cookieに秘密値を発行し、そのハッシュだけを認可トランザクションに保存します。/login と /consent は同じブラウザからの継続だけを受け付けるため、URLに載る transaction_id が漏れても第三者がログイン画面のCSRFトークンを読んだり、同意を代行して認可コードを受け取ったりできません。",
+      "endpoints": [],
+      "options": []
+    }
+  ]
+}

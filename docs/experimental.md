@@ -2,6 +2,8 @@
 
 `@maronn-openid-connect/experimental` は、まだ `@maronn-openid-connect/core` へ昇格していない仕様を先行実装したpackageです。このリポジトリではポータルの「試験的な機能」セクションから機能単位で選択でき、選んだOPにだけ生成されます。
 
+> CLIの機能トグルは3分類あります。既定で有効な標準機能、既定で無効だが安定している**オプション機能**（[docs/optional-features.md](optional-features.md)）、そしてこのドキュメントが扱う試験的な機能です。分類ごとにカタログと配線手順が分かれています。
+
 > **注意:** experimentalのAPIは安定していません。マイナーリリースでも破壊的変更や削除が起こり得るため、**他の機能より適切に動作しない可能性が高い**前提で使ってください。本番用途には向きません。ポータルの作成画面と作成完了画面にも同じ注記を表示しています。
 
 ## いま選べる機能
@@ -60,12 +62,16 @@ npm run check             # 更新後に必ず実行
 
 1. `@maronn-openid-connect/cli` / `core` / `experimental` の `dist-tags.latest` と `package.json` の固定バージョンの差
 2. experimentalの `exports` subpath（= feature-id）と `experimental-features.json` の差
-3. 最新CLIの `--help` が出力する機能トグル一覧（通常・experimental両方）と、このリポジトリが知っているトグルの差
+3. 最新CLIの `--help` が出力するオプション機能一覧と `optional-features.json` の差（[docs/optional-features.md](optional-features.md)）
+4. 最新CLIの `--help` が出力する機能トグル一覧（通常・optional・experimental）と、このリポジトリが知っているトグルの差
+5. `--help` にこのリポジトリが解釈していない見出しが増えていないか（`HELP_SECTIONS` / `unknownHelpHeadings()`）
+
+5点目は、CLIが3つ目の分類「Optional features」を追加したときにレポートが何も言わなかったことへの対策です。読んでいない分類は「分類が無い」のと区別が付かないため、見出しそのものを照合します。
 
 自動実行は2系統あります。
 
 - `.github/workflows/check-package-updates.yml` — 毎週月曜00:00 UTC。バージョン更新をブランチへ適用してPRを作り（`npm run check` の結果もPR本文に載ります）、新しいexperimental機能があればIssueを立てます。
-- Claude Codeのルーティーンタスク（Routine `trig_01SXA2TNgjZWWvagYqAdJSWa`、毎週月曜03:00 UTC） — 同じチェックを走らせ、新機能が見つかったら下記の手順までを実施してPRを出します。検出だけで終わらせないための担当です。更新がなければ何もせず終了します。停止したい場合はこのトリガーIDを削除してください。
+- Claude Codeのルーティーンタスク（Routine `trig_01SXA2TNgjZWWvagYqAdJSWa`、毎週月曜03:00 UTC） — 同じチェックを走らせ、新機能が見つかったら下記の手順までを実施してPRを出します。検出だけで終わらせないための担当です。optional分類の判定には `--help` が必要なため、このタスクは `--skip-cli-features` を付けずに実行します。更新がなければ何もせず終了します。停止したい場合はこのトリガーIDを削除してください。
 
 > **バージョン固定について:** `package-lock.json` を手で書き換えないでください。同じバージョン番号で内容が差し替わったpackageは、lockのintegrityが古いままだとnpmがキャッシュを使い続けます。バージョンを上げるときは `npm run packages:update`（内部で `npm install --package-lock-only` を実行）を使い、疑わしいときは `rm -rf node_modules package-lock.json && npm install` でやり直してください。
 

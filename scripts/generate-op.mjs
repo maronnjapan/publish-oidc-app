@@ -5,7 +5,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { OP_ID_PATTERN, ROOT, readExperimentalCatalog, supportedExperimentalFeatures } from "./lib.mjs";
+import { OP_ID_PATTERN, ROOT, readExperimentalCatalog, readOptionalCatalog, supportedFeatures } from "./lib.mjs";
 
 const execFile = promisify(execFileCallback);
 const FEATURES = ["pkce", "refresh-token", "introspection", "revocation", "request-object"];
@@ -20,25 +20,26 @@ function parseConfig(text, opId) {
 }
 
 /**
- * Validates the experimental selection against experimental-features.json. Unknown ids
- * and options are rejected rather than ignored so a stale portal cannot silently produce
- * an OP whose advertised feature set is not actually generated.
+ * Validates an opt-in selection against its catalog. Unknown ids and options are rejected
+ * rather than ignored so a stale portal cannot silently produce an OP whose advertised
+ * feature set is not actually generated. `kind` only names the group in error messages;
+ * the optional and experimental catalogs share this shape on purpose.
  */
-export function parseExperimentalSelection(value, catalog) {
+export function parseFeatureSelection(value, catalog, kind) {
   if (value === undefined || value === null) return {};
-  if (typeof value !== "object" || Array.isArray(value)) throw new Error("experimental selection must be an object");
-  const supported = new Map(supportedExperimentalFeatures(catalog).map((feature) => [feature.id, feature]));
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error(`${kind} selection must be an object`);
+  const supported = new Map(supportedFeatures(catalog).map((feature) => [feature.id, feature]));
   const selection = {};
   for (const [id, rawOptions] of Object.entries(value)) {
     const feature = supported.get(id);
-    if (!feature) throw new Error(`experimental feature ${JSON.stringify(id)} is not supported`);
-    if (rawOptions !== undefined && rawOptions !== null && (typeof rawOptions !== "object" || Array.isArray(rawOptions))) throw new Error(`experimental feature ${JSON.stringify(id)} options must be an object`);
+    if (!feature) throw new Error(`${kind} feature ${JSON.stringify(id)} is not supported`);
+    if (rawOptions !== undefined && rawOptions !== null && (typeof rawOptions !== "object" || Array.isArray(rawOptions))) throw new Error(`${kind} feature ${JSON.stringify(id)} options must be an object`);
     const declared = new Map((feature.options ?? []).map((option) => [option.id, option]));
     const options = {};
     for (const [optionId, optionValue] of Object.entries(rawOptions ?? {})) {
       const declaredOption = declared.get(optionId);
-      if (!declaredOption) throw new Error(`experimental option ${JSON.stringify(`${id}.${optionId}`)} is not supported`);
-      if (typeof optionValue !== "boolean") throw new Error(`experimental option ${JSON.stringify(`${id}.${optionId}`)} must be true or false`);
+      if (!declaredOption) throw new Error(`${kind} option ${JSON.stringify(`${id}.${optionId}`)} is not supported`);
+      if (typeof optionValue !== "boolean") throw new Error(`${kind} option ${JSON.stringify(`${id}.${optionId}`)} must be true or false`);
       options[optionId] = optionValue;
     }
     for (const [optionId, declaredOption] of declared) {
@@ -47,6 +48,14 @@ export function parseExperimentalSelection(value, catalog) {
     selection[id] = options;
   }
   return selection;
+}
+
+export function parseExperimentalSelection(value, catalog) {
+  return parseFeatureSelection(value, catalog, "experimental");
+}
+
+export function parseOptionalSelection(value, catalog) {
+  return parseFeatureSelection(value, catalog, "optional");
 }
 
 /**
@@ -91,7 +100,23 @@ export const EXPERIMENTAL_WIRING = {
   },
 };
 
+/**
+ * Same contract as EXPERIMENTAL_WIRING, for the CLI's own opt-in features. These are
+ * stable hardening the CLI generates itself, so an entry with an empty apply() is the
+ * normal case; it exists so that offering a feature in the portal and knowing how to
+ * generate it stay one decision (see docs/optional-features.md).
+ */
+export const OPTIONAL_WIRING = {
+  // Cookie-bound authorization transactions. Self-contained in the generated routes and
+  // store.ts: no new endpoint, no discovery metadata, and the binding hash rides along on
+  // the transaction record the D1 store already persists.
+  "transaction-binding": {
+    apply() {},
+  },
+};
+
 const EXPERIMENTAL_CONFIG_LINE = "const EXPERIMENTAL_FEATURES: Record<string, Record<string, unknown>> = {};";
+const OPTIONAL_CONFIG_LINE = "const OPTIONAL_FEATURES: Record<string, Record<string, unknown>> = {};";
 
 function replaceOnce(source, marker, replacement, description) {
   if (!source.includes(marker)) throw new Error(`${description} does not contain the expected marker`);
@@ -175,12 +200,16 @@ export async function generateOp(opId, configPath) {
   const catalog = await readExperimentalCatalog();
   const experimental = parseExperimentalSelection(config.experimental, catalog);
   const experimentalIds = Object.keys(experimental);
+  const optional = parseOptionalSelection(config.optional, await readOptionalCatalog());
+  const optionalIds = Object.keys(optional);
 
   const disabled = FEATURES.filter((name) => config.features[name] === false);
   const args = ["exec", "--yes", `--package=${cliPackage}`, "--", "maronn-oidc", "generate", "hono", "--output", providerDirectory];
   if (disabled.length > 0) args.push("--disable", disabled.join(","));
-  // Experimental features are off by default in the CLI and generated only on request.
-  if (experimentalIds.length > 0) args.push("--enable", experimentalIds.join(","));
+  // Both opt-in groups share one --enable list: the CLI namespaces its feature ids across
+  // the optional and experimental groups, so the selection is what decides which is which.
+  const enabledIds = [...optionalIds, ...experimentalIds];
+  if (enabledIds.length > 0) args.push("--enable", enabledIds.join(","));
   await execFile("npm", args, { cwd: ROOT, maxBuffer: 10 * 1024 * 1024 });
 
   const patched = ["apply.ts", "store.ts", "routes/authorize.ts", "routes/discovery.ts", ...(experimentalIds.includes("par") ? ["routes/par.ts"] : [])];
@@ -188,22 +217,25 @@ export async function generateOp(opId, configPath) {
     patched.map(async (file) => [file, await readFile(path.join(providerDirectory, file), "utf8")]),
   ));
   patchGeneratedSource(sources);
-  for (const id of experimentalIds) {
-    const wiring = EXPERIMENTAL_WIRING[id];
-    if (!wiring) throw new Error(`experimental feature ${JSON.stringify(id)} has no generator wiring; see docs/experimental.md`);
-    wiring.apply(sources, experimental[id]);
+  for (const [ids, selection, wiringTable, kind, guide] of [
+    [optionalIds, optional, OPTIONAL_WIRING, "optional", "docs/optional-features.md"],
+    [experimentalIds, experimental, EXPERIMENTAL_WIRING, "experimental", "docs/experimental.md"],
+  ]) {
+    for (const id of ids) {
+      const wiring = wiringTable[id];
+      if (!wiring) throw new Error(`${kind} feature ${JSON.stringify(id)} has no generator wiring; see ${guide}`);
+      wiring.apply(sources, selection[id]);
+    }
   }
   await Promise.all(Object.entries(sources).map(([file, content]) => writeFile(path.join(providerDirectory, file), content)));
 
   await cp(path.join(ROOT, "templates", "cloudflare", "persistence.ts"), path.join(providerDirectory, "persistence.ts"));
-  const entrypoint = replaceOnce(
-    await readFile(path.join(ROOT, "templates", "cloudflare", "index.ts"), "utf8"),
-    EXPERIMENTAL_CONFIG_LINE,
-    // Baked in rather than passed as a Worker binding: `required` and friends decide how
-    // strict the deployed OP is, and a binding can be edited or dropped after deployment.
-    EXPERIMENTAL_CONFIG_LINE.replace("= {};", `= ${JSON.stringify(experimental)};`),
-    "Cloudflare entrypoint template",
-  );
+  // Baked in rather than passed as Worker bindings: options like PAR's `required` decide
+  // how strict the deployed OP is, and a binding can be edited or dropped after deployment.
+  let entrypoint = await readFile(path.join(ROOT, "templates", "cloudflare", "index.ts"), "utf8");
+  for (const [line, selection] of [[OPTIONAL_CONFIG_LINE, optional], [EXPERIMENTAL_CONFIG_LINE, experimental]]) {
+    entrypoint = replaceOnce(entrypoint, line, line.replace("= {};", `= ${JSON.stringify(selection)};`), "Cloudflare entrypoint template");
+  }
   await writeFile(path.join(sourceDirectory, "index.ts"), entrypoint);
   await writeFile(path.join(appDirectory, "tsconfig.json"), `${JSON.stringify(GENERATED_TSCONFIG, null, 2)}\n`);
 
@@ -218,12 +250,13 @@ export async function generateOp(opId, configPath) {
     client_id: config.client_id,
     scopes: config.scopes,
     features: config.features,
+    optional,
     experimental,
     ...(experimentalIds.length > 0 ? { experimental_package: rootPackage.config.maronnOidcExperimental } : {}),
     generated_at: new Date().toISOString(),
   };
   await writeFile(path.join(appDirectory, "op.json"), `${JSON.stringify(metadata, null, 2)}\n`);
-  return { appDirectory, entryPoint: path.join(sourceDirectory, "index.ts"), config, cliPackage, experimental };
+  return { appDirectory, entryPoint: path.join(sourceDirectory, "index.ts"), config, cliPackage, experimental, optional };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

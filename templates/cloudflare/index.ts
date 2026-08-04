@@ -23,6 +23,14 @@ type SigningJwk = JsonWebKey & { kid: string; n: string; e: string };
  */
 const EXPERIMENTAL_FEATURES: Record<string, Record<string, unknown>> = {};
 
+/**
+ * Enabled optional features of @maronn-openid-connect/cli, keyed by feature id (see
+ * optional-features.json). Written at generation time for the same reason as
+ * EXPERIMENTAL_FEATURES above: these are hardening choices, and a hardening choice that a
+ * later binding edit can switch off is not one.
+ */
+const OPTIONAL_FEATURES: Record<string, Record<string, unknown>> = {};
+
 let cachedSigningKey: Promise<SigningKey> | undefined;
 
 function signingKeyProvider(jwkText: string): SigningKeyProvider {
@@ -71,6 +79,7 @@ function createWorkerApp(env: Env): Hono<{ Bindings: Env; Variables: Record<stri
     client_id: client.clientId,
     client_type: client.clientType,
     scopes_supported: scopes,
+    optional_features: Object.keys(OPTIONAL_FEATURES),
     experimental_features: Object.keys(EXPERIMENTAL_FEATURES),
     discovery: env.OP_ISSUER + '/.well-known/openid-configuration',
   }));

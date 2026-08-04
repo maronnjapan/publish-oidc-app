@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { EXPERIMENTAL_WIRING, generateOp, parseExperimentalSelection } from "../scripts/generate-op.mjs";
-import { bundle, readExperimentalCatalog, supportedExperimentalFeatures } from "../scripts/lib.mjs";
+import { bundle, readExperimentalCatalog, supportedFeatures } from "../scripts/lib.mjs";
 import { MemoryD1, base64Url, signingEnvironment } from "./support/d1-mock.mjs";
 
 const config = {
@@ -78,7 +78,7 @@ async function completeLogin(fetchWorker, issuer, location) {
 
 test("the catalog only advertises features the CLI and the generator both know", async () => {
   const catalog = await readExperimentalCatalog();
-  const supported = supportedExperimentalFeatures(catalog);
+  const supported = supportedFeatures(catalog);
   assert.deepEqual(supported.map((feature) => feature.id).sort(), ["par", "token-exchange"]);
   const cliHelp = await readFile("node_modules/@maronn-openid-connect/cli/dist/features.js", "utf8");
   for (const feature of supported) {

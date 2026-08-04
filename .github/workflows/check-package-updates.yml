@@ -2,8 +2,14 @@ name: check-package-updates
 
 # Weekly follow-up on @maronn-openid-connect/cli, @maronn-openid-connect/core and @maronn-openid-connect/experimental.
 # A version bump is applied on a branch and offered as a pull request; a newly published
-# experimental feature additionally needs the wiring described in docs/experimental.md,
-# so the run leaves a tracking issue for it.
+# opt-in feature additionally needs the wiring described in docs/experimental.md (for the
+# experimental package) or docs/optional-features.md (for the CLI's own optional
+# features), so the run leaves a tracking issue for it.
+#
+# The report step reads `maronn-oidc --help`, which is the only source for the optional
+# group; the apply step deliberately skips it (running an unreleased CLI to bump a pin is
+# not worth the minutes), so optional catalog entries are recorded by the Claude Code
+# routine rather than here.
 
 on:
   schedule:
@@ -82,11 +88,11 @@ jobs:
             gh pr comment --body-file "$RUNNER_TEMP/pr-body.md" "$UPDATE_BRANCH"
           fi
 
-      - name: Track experimental features that still need wiring
+      - name: Track opt-in features that still need wiring
         if: steps.check.outputs.has_catalog_work == 'true'
         run: |
           set -euo pipefail
-          title="@maronn-openid-connect/experimental の新機能を配線する"
+          title="@maronn-openid-connect の新機能を配線する"
           existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')"
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body-file "$RUNNER_TEMP/report.md"

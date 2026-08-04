@@ -7,6 +7,7 @@ Web UIから設定ごとに独立したOpenID ProviderをCloudflare Workersへ�
 - Worker 1個につきOP 1個を発行し、Workerのサブドメインラベル（例: `maronn-op-abc...`）をOP IDと共有D1の名前空間キーに使用
 - 作成画面でリダイレクトURL、`openid`に加えるスコープ、`public`/`confidential`、PKCE・Refresh Token・Introspection・Revocation・Request Objectを選択
 - `@maronn-openid-connect/experimental`の試験的な機能（PAR / RFC 9126、Token Exchange / RFC 8693）を機能単位で選択（安定していない旨を作成画面と作成完了画面に明示）
+- CLI本体のオプション機能（既定で無効な安定機能。認可トランザクションのブラウザ束縛）を機能単位で選択（既定では折りたたみ表示）
 - 1〜5ユーザーを画面または`username,password`形式のCSVで登録
 - パスワードはSHA-256（個別salt）で共有D1へ保存
 - publicではOP URLとClient ID、confidentialでは加えてClient Secretをデプロイ完了後に一度だけ表示
@@ -106,20 +107,30 @@ Discoveryは各OPの`/.well-known/openid-configuration`、JWKSは`/.well-known/j
 
 選択できる機能の一覧は`experimental-features.json`が単一の情報源で、ポータルUIも生成スクリプトもここから読みます。生成コードへのパッチ内容、D1永続化の実装、新機能を配線する手順は[docs/experimental.md](docs/experimental.md)を参照してください。
 
+## オプション機能
+
+CLIの機能トグルは3分類あります。既定で有効な標準機能、既定で無効だが**安定している**オプション機能、そして上記の試験的な機能です。オプション機能は「OIDC Core / OAuth 2.1 のどの条項も要求していない堅牢化」であるためにCLIが既定で無効にしているもので、APIが不安定なわけではありません。
+
+| feature-id | 内容 | 準拠仕様 | 追加されるもの |
+|---|---|---|---|
+| `transaction-binding` | 認可トランザクションのブラウザ束縛 | OIDC Core 1.0 §3.1.2.3 / §3.1.2.4 | なし |
+
+作成画面では「オプション機能」セクションから選べます。設定する機会がまず無いため、このセクションは既定で折りたたまれています。一覧は`optional-features.json`が単一の情報源です。配線手順と、4つ目の分類が現れたときの対応は[docs/optional-features.md](docs/optional-features.md)を参照してください。
+
 ## パッケージの追従
 
 `@maronn-openid-connect/cli`・`@maronn-openid-connect/core`・`@maronn-openid-connect/experimental`は固定バージョンで参照しています。追従は次で行います。
 
 ```sh
 npm run packages:check    # 最新版・新機能・CLIトグルの差分を表示
-npm run packages:update   # 固定バージョンとexperimentalカタログを更新
+npm run packages:update   # 固定バージョンと両方のカタログを更新
 npm run check             # 更新後の検証
 ```
 
-`check-package-updates.mjs`はレジストリの`dist-tags.latest`、experimentalの`exports` subpath（= feature-id）、最新CLIの`--help`が出す機能トグル一覧（通常・experimental両方）の3点を見ます。自動実行は2系統です。
+`check-package-updates.mjs`はレジストリの`dist-tags.latest`、experimentalの`exports` subpath（= feature-id）、最新CLIの`--help`が出す機能トグル一覧（通常・optional・experimentalの3分類）、そして`--help`にこのリポジトリが解釈していない見出しが増えていないかを見ます。最後の1点は、CLIが3つ目の分類を追加したときにレポートが何も言わなかったことへの対策です。自動実行は2系統です。
 
 - `.github/workflows/check-package-updates.yml`（毎週月曜00:00 UTC）— バージョン更新を`chore/maronn-oidc-package-updates`ブランチへ適用してPRを作り、未配線の新機能はIssueで追跡します。
-- Claude Codeのルーティーンタスク（毎週月曜03:00 UTC、トリガーID `trig_01SXA2TNgjZWWvagYqAdJSWa`）— 同じチェックに加えて、新しいexperimental機能をポータルで選択できる状態まで配線し`claude/maronn-oidc-experimental-followup`ブランチへPRを出します。更新がなければ何もしません。
+- Claude Codeのルーティーンタスク（毎週月曜03:00 UTC、トリガーID `trig_01SXA2TNgjZWWvagYqAdJSWa`）— 同じチェックに加えて、新しいopt-in機能（optional・experimentalどちらも）をポータルで選択できる状態まで配線し`claude/maronn-oidc-feature-followup`ブランチへPRを出します。CLIが新しい分類のトグルを増やした場合の対応もこのタスクが担当します。更新がなければ何もしません。
 
 ## 開発
 
@@ -130,7 +141,7 @@ npm run build
 npm run check
 ```
 
-テストはポータル入力・CSV/UI、IP制限、資格情報の条件分岐、salt付きSHA-256、D1名前空間、CLI機能トグル、生成OPのWorkers bundleを検証します。生成物の`persistence.ts`はCLIが生成したストア契約に対して型検査され、契約が変わればCIで落ちます。experimentalについては、PARとToken Exchangeそれぞれを有効にしたOPを実際に生成・バンドルし、`POST /par`から`/token`までのフロー、`request_uri`の使い捨て（並行リクエスト含む）、必須モード、スコープ絞り込み交換まで通します。
+テストはポータル入力・CSV/UI、IP制限、資格情報の条件分岐、salt付きSHA-256、D1名前空間、CLI機能トグル、生成OPのWorkers bundleを検証します。生成物の`persistence.ts`はCLIが生成したストア契約に対して型検査され、契約が変わればCIで落ちます。experimentalについては、PARとToken Exchangeそれぞれを有効にしたOPを実際に生成・バンドルし、`POST /par`から`/token`までのフロー、`request_uri`の使い捨て（並行リクエスト含む）、必須モード、スコープ絞り込み交換まで通します。optionalについては、`transaction-binding`を有効にしたOPと無効なOPを生成し、Cookieを持つブラウザだけが認可コードを取得できること・他のトランザクションのCookieでは同意を代行できないことまで通します。あわせて固定CLIの`--help`を実行し、解釈できない見出しの分類が増えていないかも検査します。
 
 ## セキュリティと運用
 
