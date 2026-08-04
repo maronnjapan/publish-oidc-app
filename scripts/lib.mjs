@@ -36,29 +36,49 @@ export async function readInfra() {
 }
 
 export const EXPERIMENTAL_CATALOG_PATH = path.join(ROOT, "experimental-features.json");
+export const OPTIONAL_CATALOG_PATH = path.join(ROOT, "optional-features.json");
 
-/** Single source of truth for @maronn-openid-connect/experimental features (see docs/experimental.md). */
-export async function readExperimentalCatalog() {
+export const FEATURE_ID_PATTERN = /^[a-z][a-z0-9-]{0,30}$/;
+
+/**
+ * The CLI ships feature toggles in three groups, and this repository follows all three:
+ * the default set (always generated unless disabled), CLI-native optional features, and
+ * the experimental features that live in a separate package. The two opt-in groups get a
+ * catalog file each, with the same shape, so adding a group member is data plus wiring
+ * rather than a new code path.
+ */
+async function readFeatureCatalog(catalogPath, kind) {
+  const fileName = path.basename(catalogPath);
   let catalog;
   try {
-    catalog = JSON.parse(await readFile(EXPERIMENTAL_CATALOG_PATH, "utf8"));
+    catalog = JSON.parse(await readFile(catalogPath, "utf8"));
   } catch (error) {
-    throw new Error(`unable to read experimental-features.json: ${error.message}`);
+    throw new Error(`unable to read ${fileName}: ${error.message}`);
   }
-  if (!Array.isArray(catalog?.features)) throw new Error("experimental-features.json must contain a features array");
+  if (!Array.isArray(catalog?.features)) throw new Error(`${fileName} must contain a features array`);
   for (const feature of catalog.features) {
-    if (typeof feature?.id !== "string" || !/^[a-z][a-z0-9-]{0,30}$/.test(feature.id)) {
-      throw new Error("every experimental feature needs a lowercase id");
+    if (typeof feature?.id !== "string" || !FEATURE_ID_PATTERN.test(feature.id)) {
+      throw new Error(`every ${kind} feature needs a lowercase id`);
     }
     if (feature.status !== "supported" && feature.status !== "detected") {
-      throw new Error(`experimental feature ${feature.id} must be status supported or detected`);
+      throw new Error(`${kind} feature ${feature.id} must be status supported or detected`);
     }
   }
   return catalog;
 }
 
+/** Single source of truth for @maronn-openid-connect/experimental features (see docs/experimental.md). */
+export async function readExperimentalCatalog() {
+  return readFeatureCatalog(EXPERIMENTAL_CATALOG_PATH, "experimental");
+}
+
+/** Single source of truth for the CLI's own opt-in features (see docs/optional-features.md). */
+export async function readOptionalCatalog() {
+  return readFeatureCatalog(OPTIONAL_CATALOG_PATH, "optional");
+}
+
 /** Features that are wired into the generator, i.e. the ones the portal may offer. */
-export function supportedExperimentalFeatures(catalog) {
+export function supportedFeatures(catalog) {
   return catalog.features.filter((feature) => feature.status === "supported");
 }
 
