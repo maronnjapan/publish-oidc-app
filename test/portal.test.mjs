@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -242,4 +242,40 @@ test("Origin is checked before D1 or dispatch", async () => {
 
 test("allocated OP id is the Worker subdomain label and namespace key", () => {
   assert.match(allocateOpId(1784764800000), /^maronn-op-[a-z0-9]{10,16}$/);
+});
+
+test("the UI offers every supported experimental feature and warns that they are unstable", async () => {
+  const catalog = JSON.parse(await readFile("experimental-features.json", "utf8"));
+  const supported = catalog.features.filter((feature) => feature.status === "supported");
+  assert.ok(supported.length > 0);
+  for (const feature of supported) {
+    assert.match(HTML, new RegExp(`class="experimental-toggle-input" type="checkbox" value="${feature.id}"`));
+    for (const option of feature.options ?? []) assert.match(HTML, new RegExp(`data-feature="${feature.id}" data-option="${option.id}"`));
+  }
+  for (const detected of catalog.features.filter((feature) => feature.status !== "supported")) {
+    assert.doesNotMatch(HTML, new RegExp(`value="${detected.id}" data-label=`), "features that are not wired up must not be selectable");
+  }
+  assert.match(HTML, /他の機能より適切に動作しない可能性が高い/);
+  assert.match(HTML, /@maronn-openid-connect\/experimental はAPIが安定しておらず/);
+});
+
+test("experimental selections are validated against the catalog and defaulted", () => {
+  assert.deepEqual(parseInput(createBody()).value.experimental, {});
+  assert.deepEqual(parseInput({ ...createBody(), experimental: { par: {} } }).value.experimental, { par: { required: false } });
+  assert.deepEqual(parseInput({ ...createBody(), experimental: { par: { required: true } } }).value.experimental, { par: { required: true } });
+  assert.match(parseInput({ ...createBody(), experimental: { unknown: {} } }).message, /experimental feature "unknown"/);
+  assert.match(parseInput({ ...createBody(), experimental: { par: { nope: true } } }).message, /experimental option "par.nope"/);
+  assert.match(parseInput({ ...createBody(), experimental: { par: { required: "yes" } } }).message, /must be true or false/);
+  assert.match(parseInput({ ...createBody(), experimental: [] }).message, /experimental must be an object/);
+});
+
+test("the experimental selection reaches the deployment config", async () => {
+  const DB = new MockDatabase();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(null, { status: 204 });
+  try {
+    const response = await route(createRequest({ ...createBody(), experimental: { par: { required: true } } }), env(DB));
+    assert.equal(response.status, 202);
+    assert.deepEqual(JSON.parse([...DB.requests.values()][0].config_json).experimental, { par: { required: true } });
+  } finally { globalThis.fetch = originalFetch; }
 });

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import type { SigningKey, SigningKeyProvider } from '@maronn-oidc/core';
+import type { ClientInfo, SigningKey, SigningKeyProvider, TokenClientInfo } from '@maronn-openid-connect/core';
 import { applyOidc } from './oidc-provider/apply.js';
-import { createD1Runtime, type RuntimeClient } from './oidc-provider/persistence.js';
+import { createD1ParStore, createD1ProviderStores } from './oidc-provider/persistence.js';
 
 interface Env {
   DB: D1Database;
@@ -12,7 +12,16 @@ interface Env {
   OIDC_SIGNING_JWK: string;
 }
 
+type RuntimeClient = ClientInfo & TokenClientInfo & { offlineAccessAllowed?: boolean };
 type SigningJwk = JsonWebKey & { kid: string; n: string; e: string };
+
+/**
+ * Enabled @maronn-openid-connect/experimental features, keyed by feature id (see
+ * experimental-features.json). Written by scripts/generate-op.mjs at generation time
+ * rather than read from a Worker variable: options such as PAR's `required` are security
+ * decisions, and a mutable binding could silently downgrade a deployed OP.
+ */
+const EXPERIMENTAL_FEATURES: Record<string, Record<string, unknown>> = {};
 
 let cachedSigningKey: Promise<SigningKey> | undefined;
 
@@ -34,13 +43,13 @@ function createWorkerApp(env: Env): Hono<{ Bindings: Env; Variables: Record<stri
   const app = new Hono<{ Bindings: Env; Variables: Record<string, any> }>();
   const client = JSON.parse(env.OIDC_CLIENT_CONFIG) as RuntimeClient;
   const scopes = JSON.parse(env.ALLOWED_SCOPES) as string[];
-  const runtime = createD1Runtime(env.DB, env.OP_ID, client);
+  const clientResolver = { findClient: async (clientId: string) => clientId === client.clientId ? client : null };
 
   app.use('*', async (c, next) => {
-    for (const [name, value] of Object.entries(runtime)) c.set(name, value);
-    c.set('authCodeResolver', runtime.authorizationCodeResolver);
-    c.set('tokenClientResolver', runtime.clientResolver);
     c.set('allowedScopes', scopes);
+    // applyOidc only falls back to the generated in-memory PAR store when nothing is
+    // already in context, so seed the D1-backed one here (see scripts/generate-op.mjs).
+    c.set('parStore', createD1ParStore(env.DB, env.OP_ID));
     c.header('X-Content-Type-Options', 'nosniff');
     c.header('Referrer-Policy', 'no-referrer');
     c.header('X-Frame-Options', 'DENY');
@@ -50,10 +59,10 @@ function createWorkerApp(env: Env): Hono<{ Bindings: Env; Variables: Record<stri
   applyOidc(app, {
     config: { issuer: env.OP_ISSUER },
     signingKeyProvider: signingKeyProvider(env.OIDC_SIGNING_JWK),
-    clientResolver: { findClient: async (clientId: string) => clientId === client.clientId ? client : null },
-    tokenClientResolver: { findClient: async (clientId: string) => clientId === client.clientId ? client : null },
-    sessionResolver: runtime.sessionResolver,
-    consentResolver: runtime.consentResolver,
+    clientResolver,
+    tokenClientResolver: clientResolver,
+    // Request-aware factory: the D1 binding only exists per request (env).
+    storage: () => createD1ProviderStores(env.DB, env.OP_ID),
     corsOrigins: '*',
   });
 
@@ -62,6 +71,7 @@ function createWorkerApp(env: Env): Hono<{ Bindings: Env; Variables: Record<stri
     client_id: client.clientId,
     client_type: client.clientType,
     scopes_supported: scopes,
+    experimental_features: Object.keys(EXPERIMENTAL_FEATURES),
     discovery: env.OP_ISSUER + '/.well-known/openid-configuration',
   }));
   return app;

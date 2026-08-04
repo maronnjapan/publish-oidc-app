@@ -7,130 +7,60 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { generateOp } from "../scripts/generate-op.mjs";
 import { bundle } from "../scripts/lib.mjs";
+import { MemoryD1, base64Url, signingEnvironment } from "./support/d1-mock.mjs";
 
-function base64Url(value) { return Buffer.from(value).toString("base64url"); }
+const opId = "maronn-op-flow123456";
+const issuer = `https://${opId}.example.workers.dev`;
+const config = {
+  op_id: opId,
+  name: "Flow OP",
+  redirect_url: "https://client.example/callback",
+  client_type: "confidential",
+  client_id: "client_flow123456789",
+  client_secret: "flow-secret-that-is-long-enough-for-testing",
+  scopes: ["openid", "profile", "email"],
+  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true },
+};
 
-class FlowDatabase {
-  records = new Map();
-  consents = new Map();
-  grants = new Set();
-  users = new Map();
+const temporary = await mkdtemp(path.join(os.tmpdir(), "oidc-flow-test-"));
+const configPath = path.join(temporary, "config.json");
+await writeFile(configPath, JSON.stringify(config));
+const generated = await generateOp(opId, configPath);
+const workerPath = path.join(temporary, "worker.mjs");
+await writeFile(workerPath, await bundle(generated.entryPoint, { absWorkingDir: generated.appDirectory }));
+const worker = await import(`${pathToFileURL(workerPath).href}?${Date.now()}`);
 
-  prepare(sql) {
-    const database = this;
-    return {
-      bind(...params) {
-        return {
-          async first() {
-            if (sql.includes("FROM oidc_records")) return database.records.get(`${params[0]}|${params[1]}|${params[2]}`) ?? null;
-            if (sql.includes("password_hash") && sql.includes("FROM oidc_users")) return database.users.get(`${params[0]}|${params[1]}`) ?? null;
-            if (sql.includes("SELECT claims_json FROM oidc_users")) {
-              const user = database.users.get(`${params[0]}|${params[1]}`);
-              return user ? { claims_json: user.claims_json } : null;
-            }
-            if (sql.includes("SELECT scopes_json FROM oidc_consents")) {
-              const scopes_json = database.consents.get(`${params[0]}|${params[1]}|${params[2]}`);
-              return scopes_json ? { scopes_json } : null;
-            }
-            return null;
-          },
-          async run() {
-            if (sql.startsWith("INSERT INTO oidc_records")) {
-              database.records.set(`${params[0]}|${params[1]}|${params[2]}`, { value_json: params[3], expires_at: params[4], updated_at: params[5] });
-            } else if (sql.startsWith("DELETE FROM oidc_records") && sql.includes("record_key")) {
-              database.records.delete(`${params[0]}|${params[1]}|${params[2]}`);
-            } else if (sql.includes("json_extract(value_json, '$.grantId')")) {
-              for (const [key, value] of database.records) {
-                if (key.startsWith(`${params[0]}|${params[1]}|`) && JSON.parse(value.value_json).grantId === params[2]) database.records.delete(key);
-              }
-            } else if (sql.startsWith("INSERT INTO oidc_consents")) {
-              database.consents.set(`${params[0]}|${params[1]}|${params[2]}`, params[3]);
-            } else if (sql.startsWith("INSERT OR IGNORE INTO oidc_consent_grants")) {
-              database.grants.add(params.join("|"));
-            }
-            return { success: true };
-          },
-          async all() { return { success: true, results: [] }; },
-        };
-      },
-    };
-  }
+const context = { waitUntil() {}, passThroughOnException() {} };
 
-  async batch(statements) { for (const statement of statements) await statement.run(); return []; }
-}
-
-async function passwordRow(username, password) {
-  const salt = webcrypto.getRandomValues(new Uint8Array(16));
-  const passwordBytes = new TextEncoder().encode(password);
-  const saltedPassword = new Uint8Array(salt.length + passwordBytes.length);
-  saltedPassword.set(salt);
-  saltedPassword.set(passwordBytes, salt.length);
-  const hash = await webcrypto.subtle.digest("SHA-256", saltedPassword);
-  return { username, password_hash: base64Url(new Uint8Array(hash)), password_salt: base64Url(salt), password_iterations: 1, claims_json: JSON.stringify({ sub: username, name: "Alice Example", preferred_username: username, email: "alice@example.com", email_verified: true }) };
-}
-
-test("generated OP completes authorization-code login through shared D1", async () => {
-  const opId = "maronn-op-flow123456";
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "oidc-flow-test-"));
-  const configPath = path.join(temporary, "config.json");
-  const config = {
-    op_id: opId,
-    name: "Flow OP",
-    redirect_url: "https://client.example/callback",
-    client_type: "confidential",
-    client_id: "client_flow123456789",
-    client_secret: "flow-secret-that-is-long-enough-for-testing",
-    scopes: ["openid", "profile", "email"],
-    features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true },
-  };
-  await writeFile(configPath, JSON.stringify(config));
-  const generated = await generateOp(opId, configPath);
-  const workerCode = await bundle(generated.entryPoint, { absWorkingDir: generated.appDirectory });
-  const workerPath = path.join(temporary, "worker.mjs");
-  await writeFile(workerPath, workerCode);
-  const worker = await import(`${pathToFileURL(workerPath).href}?${Date.now()}`);
-
-  const keyPair = await webcrypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
-  const privateJwk = await webcrypto.subtle.exportKey("jwk", keyPair.privateKey);
-  const issuer = "https://maronn-op-flow123456.example.workers.dev";
-  const DB = new FlowDatabase();
-  DB.users.set(`${opId}|alice`, await passwordRow("alice", "password-123"));
-  const runtimeEnv = {
-    DB,
-    OP_ID: opId,
-    OP_ISSUER: issuer,
-    ALLOWED_SCOPES: JSON.stringify(config.scopes),
-    OIDC_SIGNING_JWK: JSON.stringify({ ...privateJwk, alg: "RS256", use: "sig", kid: "flow-key" }),
-    OIDC_CLIENT_CONFIG: JSON.stringify({ clientId: config.client_id, clientSecret: config.client_secret, redirectUris: [config.redirect_url], clientType: "confidential", offlineAccessAllowed: true, grantTypes: ["authorization_code", "refresh_token"], tokenEndpointAuthMethod: "client_secret_post" }),
-  };
-  const context = { waitUntil() {}, passThroughOnException() {} };
+async function startSession() {
+  const DB = new MemoryD1();
+  await DB.addUser(opId, "alice", "password-123");
+  const runtimeEnv = await signingEnvironment(issuer, opId, config, DB);
   const fetchWorker = (request) => worker.default.fetch(request, runtimeEnv, context);
-
   const verifier = "a".repeat(64);
   const challenge = base64Url(new Uint8Array(await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
   const authorizeUrl = new URL(`${issuer}/authorize`);
   for (const [name, value] of Object.entries({ response_type: "code", client_id: config.client_id, redirect_uri: config.redirect_url, scope: "openid profile email", state: "flow-state", nonce: "flow-nonce", code_challenge: challenge, code_challenge_method: "S256" })) authorizeUrl.searchParams.set(name, value);
   const authorize = await fetchWorker(new Request(authorizeUrl));
-  assert.equal(authorize.status, 302);
-  const loginUrl = new URL(authorize.headers.get("location"), issuer);
-  const transactionId = loginUrl.searchParams.get("transaction_id");
-  assert.ok(transactionId);
+  assert.equal(authorize.status, 302, await authorize.clone().text());
+  const transactionId = new URL(authorize.headers.get("location"), issuer).searchParams.get("transaction_id");
+  const loginPage = await fetchWorker(new Request(new URL(authorize.headers.get("location"), issuer)));
+  const csrfToken = (await loginPage.text()).match(/name="csrf_token" value="([^"]+)"/)?.[1];
+  assert.ok(transactionId && csrfToken);
+  const login = (username, password) => fetchWorker(new Request(`${issuer}/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ transaction_id: transactionId, csrf_token: csrfToken, username, password }) }));
+  return { DB, fetchWorker, transactionId, csrfToken, verifier, login };
+}
 
-  const loginPage = await fetchWorker(new Request(loginUrl));
-  assert.equal(loginPage.status, 200);
-  const loginHtml = await loginPage.text();
-  const csrfToken = loginHtml.match(/name="csrf_token" value="([^"]+)"/)?.[1];
-  assert.ok(csrfToken);
+test("generated OP completes authorization-code login through shared D1", async () => {
+  const { DB, fetchWorker, transactionId, csrfToken, verifier, login } = await startSession();
 
-  const loginBody = new URLSearchParams({ transaction_id: transactionId, csrf_token: csrfToken, username: "alice", password: "password-123" });
-  const login = await fetchWorker(new Request(`${issuer}/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: loginBody }));
-  assert.equal(login.status, 302);
-  assert.match(login.headers.get("set-cookie"), /session_id=/);
-  const consentUrl = new URL(login.headers.get("location"), issuer);
+  const loggedIn = await login("alice", "password-123");
+  assert.equal(loggedIn.status, 302, await loggedIn.clone().text());
+  assert.match(loggedIn.headers.get("set-cookie"), /session_id=/);
 
   const consentBody = new URLSearchParams({ transaction_id: transactionId, csrf_token: csrfToken, action: "approve" });
-  const consent = await fetchWorker(new Request(consentUrl, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: consentBody }));
-  assert.equal(consent.status, 302);
+  const consent = await fetchWorker(new Request(new URL(loggedIn.headers.get("location"), issuer), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: consentBody }));
+  assert.equal(consent.status, 302, await consent.clone().text());
   const callback = new URL(consent.headers.get("location"));
   assert.equal(callback.origin + callback.pathname, config.redirect_url);
   assert.equal(callback.searchParams.get("state"), "flow-state");
@@ -149,5 +79,21 @@ test("generated OP completes authorization-code login through shared D1", async 
   const claims = await userinfoResponse.json();
   assert.equal(claims.sub, "alice");
   assert.equal(claims.email, "alice@example.com");
+
+  // Every row the flow wrote is namespaced by op_id, and each store's key prefix lands in
+  // the indexed `kind` column instead of being folded into the hashed record key.
   assert.ok([...DB.records.keys()].every((key) => key.startsWith(`${opId}|`)));
+  // The auth transaction is consumed when the code is issued, so it is gone by now.
+  for (const kind of ["access-token:", "authorization-code:", "consent:", "browser-session:"]) {
+    assert.ok(DB.kindsInUse().includes(kind), `expected a ${kind} record, saw ${DB.kindsInUse().join(", ")}`);
+  }
+});
+
+test("the CLI's development fixture account cannot log in to a published OP", async () => {
+  const { login } = await startSession();
+  // The generated store.ts seeds `testuser` into both its JSON-backed and in-memory user
+  // stores. Only accounts registered through the portal may authenticate.
+  const response = await login("testuser", "password");
+  assert.equal(response.status, 200, "a rejected login re-renders the form rather than redirecting");
+  assert.doesNotMatch(response.headers.get("set-cookie") ?? "", /session_id=/);
 });

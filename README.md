@@ -1,11 +1,12 @@
 # Maronn OIDC Provider Publisher
 
-Web UIから設定ごとに独立したOpenID ProviderをCloudflare Workersへ発行する基盤です。生成コードは固定バージョンの`@maronn-oidc/cli`でHonoテンプレートを作り、OIDC処理には`@maronn-oidc/core`を使用します。
+Web UIから設定ごとに独立したOpenID ProviderをCloudflare Workersへ発行する基盤です。生成コードは固定バージョンの`@maronn-openid-connect/cli`でHonoテンプレートを作り、OIDC処理には`@maronn-openid-connect/core`を使用します。
 
 ## 主な機能
 
 - Worker 1個につきOP 1個を発行し、Workerのサブドメインラベル（例: `maronn-op-abc...`）をOP IDと共有D1の名前空間キーに使用
 - 作成画面でリダイレクトURL、`openid`に加えるスコープ、`public`/`confidential`、PKCE・Refresh Token・Introspection・Revocation・Request Objectを選択
+- `@maronn-openid-connect/experimental`の試験的な機能（PAR / RFC 9126、Token Exchange / RFC 8693）を機能単位で選択（安定していない旨を作成画面と作成完了画面に明示）
 - 1〜5ユーザーを画面または`username,password`形式のCSVで登録
 - パスワードはSHA-256（個別salt）で共有D1へ保存
 - publicではOP URLとClient ID、confidentialでは加えてClient Secretをデプロイ完了後に一度だけ表示
@@ -19,7 +20,7 @@ Web UIから設定ごとに独立したOpenID ProviderをCloudflare Workersへ�
 ```text
 Browser -> Portal Worker -> GitHub workflow_dispatch
                               |
-                              +-> @maronn-oidc/cli generate hono
+                              +-> @maronn-openid-connect/cli generate hono
                               +-> D1 adapter overlay + esbuild
                               +-> Cloudflare Worker Upload API
 
@@ -92,6 +93,34 @@ bob,another-long-password
 
 Discoveryは各OPの`/.well-known/openid-configuration`、JWKSは`/.well-known/jwks.json`です。
 
+## 試験的な機能
+
+作成画面の「試験的な機能」から`@maronn-openid-connect/experimental`の機能を選べます。選択内容はCLIの`--enable`へ渡され、選んだOPにだけ生成されます。選ばなければ生成コードはこのpackageを一切参照しません。
+
+| feature-id | 内容 | 準拠仕様 | 追加エンドポイント |
+|---|---|---|---|
+| `par` | Pushed Authorization Requests | RFC 9126 | `POST /par` |
+| `token-exchange` | Token Exchange | RFC 8693 | `/token`の`grant_type=urn:ietf:params:oauth:grant-type:token-exchange` |
+
+**これらはAPIが安定しておらず、他の機能より適切に動作しない可能性が高い**ため、動作検証用途に限ってください。マイナーリリースでも破壊的変更や削除が起こり得ます。同じ注記を作成画面と作成完了画面にも表示します。
+
+選択できる機能の一覧は`experimental-features.json`が単一の情報源で、ポータルUIも生成スクリプトもここから読みます。生成コードへのパッチ内容、D1永続化の実装、新機能を配線する手順は[docs/experimental.md](docs/experimental.md)を参照してください。
+
+## パッケージの追従
+
+`@maronn-openid-connect/cli`・`@maronn-openid-connect/core`・`@maronn-openid-connect/experimental`は固定バージョンで参照しています。追従は次で行います。
+
+```sh
+npm run packages:check    # 最新版・新機能・CLIトグルの差分を表示
+npm run packages:update   # 固定バージョンとexperimentalカタログを更新
+npm run check             # 更新後の検証
+```
+
+`check-package-updates.mjs`はレジストリの`dist-tags.latest`、experimentalの`exports` subpath（= feature-id）、最新CLIの`--help`が出す機能トグル一覧（通常・experimental両方）の3点を見ます。自動実行は2系統です。
+
+- `.github/workflows/check-package-updates.yml`（毎週月曜00:00 UTC）— バージョン更新を`chore/maronn-oidc-package-updates`ブランチへ適用してPRを作り、未配線の新機能はIssueで追跡します。
+- Claude Codeのルーティーンタスク（毎週月曜03:00 UTC、トリガーID `trig_01SXA2TNgjZWWvagYqAdJSWa`）— 同じチェックに加えて、新しいexperimental機能をポータルで選択できる状態まで配線し`claude/maronn-oidc-experimental-followup`ブランチへPRを出します。更新がなければ何もしません。
+
 ## 開発
 
 ```sh
@@ -101,7 +130,7 @@ npm run build
 npm run check
 ```
 
-テストはポータル入力・CSV/UI、IP制限、資格情報の条件分岐、salt付きSHA-256、D1名前空間、CLI機能トグル、生成OPのWorkers bundleを検証します。
+テストはポータル入力・CSV/UI、IP制限、資格情報の条件分岐、salt付きSHA-256、D1名前空間、CLI機能トグル、生成OPのWorkers bundleを検証します。生成物の`persistence.ts`はCLIが生成したストア契約に対して型検査され、契約が変わればCIで落ちます。experimentalについては、PARとToken Exchangeそれぞれを有効にしたOPを実際に生成・バンドルし、`POST /par`から`/token`までのフロー、`request_uri`の使い捨て（並行リクエスト含む）、必須モード、スコープ絞り込み交換まで通します。
 
 ## セキュリティと運用
 
