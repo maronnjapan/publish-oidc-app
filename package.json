@@ -19,20 +19,25 @@
     "deploy:reaper": "node scripts/deploy-reaper.mjs",
     "packages:check": "node scripts/check-package-updates.mjs",
     "packages:update": "node scripts/check-package-updates.mjs --apply",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.mjs",
     "typecheck": "tsc --noEmit",
-    "audit:scripts": "bash -n guide.sh && for file in scripts/*.mjs; do node --check \"$file\" || exit 1; done",
+    "audit:scripts": "bash -n guide.sh && for file in scripts/*.mjs system/db/*.mjs; do node --check \"$file\" || exit 1; done",
     "check": "npm run typecheck && npm run audit:scripts && npm test && npm run build"
   },
   "dependencies": {
     "@maronn-openid-connect/core": "0.1.1",
     "@maronn-openid-connect/experimental": "0.0.3",
-    "hono": "^4.9.2"
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.9.2",
+    "preact": "^10.29.8",
+    "preact-render-to-string": "^6.7.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260722.1",
     "@maronn-openid-connect/cli": "0.1.1",
     "esbuild": "^0.28.1",
+    "linkedom": "^0.18.13",
     "typescript": "^5.9.2"
   }
 }

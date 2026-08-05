@@ -38,9 +38,9 @@
 - `summary` は**必須**です。1行・120文字以内で、改行は書けません（`scripts/lib.mjs` の `readChoiceCatalog()` が検査します）。HTMLはエスケープされるのでタグは書けません。
 - `links` は**任意**です。省略しても、空配列にしても、アンカーは出ません。
 - `default: true` は初期状態でチェック（`feature` グループ）または `selected`（`client-type` グループ）にします。
-- `required: true` はチェック済み・操作不可で表示します。`openid` だけがこれに当たり、値は画面のスクリプトが無条件に送ります。
+- `required: true` はチェック済み・操作不可で表示します。`openid` だけがこれに当たり、値はフォームが無条件に送ります。
 
-グループの `id` はUIの都合と結びついています。`scope` と `feature` はチェックボックスに付くclass名で、画面のスクリプトが `.scope:checked` / `.feature` として集めます。`client-type` だけは `<select>` なので、`items` が `<option>` に、説明はフィールド直下の行になります。
+グループの `id` はUIの都合と結びついています。`scope` と `feature` は `ChoiceCard` に渡すグループ名で、そのままチェックボックスのclass名になります（選択状態は `system/portal/src/ui/form-state.ts` が持ちます）。`client-type` だけは `<select>` なので、`items` が `<option>` に、説明はフィールド直下の行になります。
 
 ## リンクの書き方
 

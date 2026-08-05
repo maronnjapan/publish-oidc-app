@@ -6,22 +6,15 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { ROOT, apiRequest, requireEnv } from "./lib.mjs";
+import { INDEX_STATEMENTS, SCHEMA_STATEMENTS, TABLE_STATEMENTS } from "../system/db/ddl.mjs";
 
 const execFile = promisify(execFileCallback);
 const DATABASE_NAME = "maronn-oidc-shared-d1";
 const COMPATIBILITY_DATE = "2026-07-01";
 
-export const SCHEMA_STATEMENTS = [
-  `CREATE TABLE IF NOT EXISTS registry_requests (request_id TEXT PRIMARY KEY, status TEXT NOT NULL, op_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, config_json TEXT, url TEXT, error TEXT, ip_key TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-  `CREATE INDEX IF NOT EXISTS idx_registry_requests_status ON registry_requests (status, created_at)`,
-  `CREATE TABLE IF NOT EXISTS registry_ops (op_id TEXT PRIMARY KEY, script_name TEXT NOT NULL UNIQUE, name TEXT NOT NULL, url TEXT NOT NULL, client_id TEXT NOT NULL, client_type TEXT NOT NULL, redirect_uri TEXT NOT NULL, scopes_json TEXT NOT NULL, features_json TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT, status TEXT NOT NULL DEFAULT 'active')`,
-  `CREATE TABLE IF NOT EXISTS registry_rate_limits (scope TEXT NOT NULL, key TEXT NOT NULL, date_utc TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (scope, key, date_utc))`,
-  `CREATE TABLE IF NOT EXISTS oidc_users (op_id TEXT NOT NULL, username TEXT NOT NULL, password_hash TEXT NOT NULL, password_salt TEXT NOT NULL, password_iterations INTEGER NOT NULL, claims_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (op_id, username))`,
-  `CREATE TABLE IF NOT EXISTS oidc_records (op_id TEXT NOT NULL, kind TEXT NOT NULL, record_key TEXT NOT NULL, value_json TEXT NOT NULL, expires_at INTEGER, updated_at TEXT NOT NULL, PRIMARY KEY (op_id, kind, record_key))`,
-  `CREATE INDEX IF NOT EXISTS idx_oidc_records_expiry ON oidc_records (op_id, kind, expires_at)`,
-  `CREATE TABLE IF NOT EXISTS oidc_consents (op_id TEXT NOT NULL, subject TEXT NOT NULL, client_id TEXT NOT NULL, scopes_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (op_id, subject, client_id))`,
-  `CREATE TABLE IF NOT EXISTS oidc_consent_grants (op_id TEXT NOT NULL, subject TEXT NOT NULL, client_id TEXT NOT NULL, grant_id TEXT NOT NULL, PRIMARY KEY (op_id, subject, client_id, grant_id))`,
-];
+// The schema itself lives beside the Drizzle tables the Workers query through, so setup and
+// the running code cannot describe different databases (see system/db/ddl.mjs).
+export { SCHEMA_STATEMENTS };
 
 function baseUrl(accountId, suffix) { return `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}${suffix}`; }
 
@@ -47,42 +40,58 @@ async function ensureD1(accountId, token) {
   return database.uuid;
 }
 
-async function applySchema(accountId, token, databaseId) {
-  for (const sql of SCHEMA_STATEMENTS) {
-    const { result } = await apiRequest(baseUrl(accountId, `/d1/database/${encodeURIComponent(databaseId)}/query`), token, { method: "POST", body: JSON.stringify({ sql, params: [] }) });
+function d1Runner(accountId, token, databaseId) {
+  return async (sql, params = []) => {
+    const { result } = await apiRequest(baseUrl(accountId, `/d1/database/${encodeURIComponent(databaseId)}/query`), token, { method: "POST", body: JSON.stringify({ sql, params }) });
     const first = Array.isArray(result) ? result[0] : result;
     if (!first?.success) throw new Error(`D1 schema statement failed: ${sql.slice(0, 60)}`);
-  }
-  await ensureRegistryOpsExpiry(accountId, token, databaseId);
+    return first;
+  };
 }
 
-async function runD1Statement(accountId, token, databaseId, sql, params = []) {
-  const { result } = await apiRequest(baseUrl(accountId, `/d1/database/${encodeURIComponent(databaseId)}/query`), token, { method: "POST", body: JSON.stringify({ sql, params }) });
-  const first = Array.isArray(result) ? result[0] : result;
-  if (!first?.success) throw new Error(`D1 schema statement failed: ${sql.slice(0, 60)}`);
-  return first;
+/**
+ * Tables first, then the columns a database created before them is missing, then the
+ * indexes. The order is not cosmetic: `idx_registry_ops_expiry` is on `registry_ops
+ * .expires_at`, which the oldest databases only gain in the step between the two lists.
+ *
+ * Takes a `run(sql, params)` rather than credentials so the sequence itself can be tested
+ * against a real database (test/db-schema.test.mjs) instead of only against production.
+ */
+export async function applySchemaWith(run) {
+  for (const sql of TABLE_STATEMENTS) await run(sql);
+  await ensureRegistryOpsExpiryWith(run);
 }
 
-export async function ensureRegistryOpsExpiry(accountId, token, databaseId) {
-  const tableInfo = await runD1Statement(accountId, token, databaseId, "PRAGMA table_info(registry_ops)");
+/**
+ * Brings a database up to the current shape of `registry_ops` and then creates every index.
+ *
+ * The oldest databases have a `registry_ops` with no `expires_at` at all, so the column is
+ * added and backfilled from `created_at` before anything indexes it.
+ */
+export async function ensureRegistryOpsExpiryWith(run) {
+  const tableInfo = await run("PRAGMA table_info(registry_ops)");
   const columns = new Set((Array.isArray(tableInfo.results) ? tableInfo.results : []).map((row) => row.name));
   if (!columns.has("expires_at")) {
-    await runD1Statement(accountId, token, databaseId, "ALTER TABLE registry_ops ADD COLUMN expires_at TEXT");
+    await run("ALTER TABLE registry_ops ADD COLUMN expires_at TEXT");
   }
-  await runD1Statement(
-    accountId,
-    token,
-    databaseId,
+  await run(
     `UPDATE registry_ops
      SET expires_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '+24 hours')
      WHERE expires_at IS NULL`,
   );
-  await runD1Statement(
-    accountId,
-    token,
-    databaseId,
-    "CREATE INDEX IF NOT EXISTS idx_registry_ops_expiry ON registry_ops (status, expires_at)",
-  );
+  for (const sql of INDEX_STATEMENTS) await run(sql);
+}
+
+/**
+ * The reaper is what reads `registry_ops.expires_at`, so `deploy:reaper` runs this on its
+ * own to make sure the column is there before the cron goes live.
+ */
+export async function ensureRegistryOpsExpiry(accountId, token, databaseId) {
+  await ensureRegistryOpsExpiryWith(d1Runner(accountId, token, databaseId));
+}
+
+async function applySchema(accountId, token, databaseId) {
+  await applySchemaWith(d1Runner(accountId, token, databaseId));
 }
 
 async function main() {

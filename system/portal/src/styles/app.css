@@ -1,0 +1,355 @@
+/*
+ * The portal's stylesheet. It is served from its own hashed route rather than inlined into
+ * the document, which is what lets the Content-Security-Policy forbid inline styles outright.
+ */
+
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  color: #16233b;
+  background: #f4f7fb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 2rem 1rem 4rem;
+}
+
+main {
+  width: min(56rem, 100%);
+  margin: auto;
+}
+
+header {
+  margin-bottom: 1.5rem;
+}
+
+h1 {
+  margin: 0 0 0.4rem;
+  font-size: clamp(1.65rem, 4vw, 2.4rem);
+}
+
+h2 {
+  margin: 0 0 0.9rem;
+  font-size: 1.1rem;
+}
+
+p {
+  line-height: 1.65;
+}
+
+.card {
+  margin: 1rem 0;
+  padding: 1.35rem;
+  background: #fff;
+  border: 1px solid #dce3ed;
+  border-radius: 0.9rem;
+  box-shadow: 0 0.6rem 2rem #1e3a5f0d;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+label,
+legend {
+  font-weight: 700;
+}
+
+label.block {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+input,
+select,
+button {
+  font: inherit;
+}
+
+input[type="text"],
+input[type="url"],
+input[type="password"],
+select {
+  width: 100%;
+  min-height: 2.7rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #aeb9c8;
+  border-radius: 0.5rem;
+  background: #fff;
+  color: inherit;
+}
+
+fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  /* Fieldsets default to min-width: min-content, which would stop the grids inside the
+     form's wrapper fieldset from shrinking on a narrow screen. */
+  min-width: 0;
+}
+
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1.1rem;
+  margin-top: 0.7rem;
+}
+
+.choices label {
+  font-weight: 500;
+}
+
+.choice {
+  padding: 0.65rem 0 0;
+  margin-top: 0.65rem;
+  border-top: 1px solid #e6ebf2;
+}
+
+.choice:first-of-type {
+  margin-top: 0.7rem;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.choice > label {
+  display: block;
+  font-weight: 500;
+}
+
+.choice > .hint {
+  margin-left: 1.5rem;
+}
+
+.hint {
+  margin: 0.35rem 0 0;
+  color: #52627a;
+  font-size: 0.9rem;
+}
+
+.hint a {
+  color: #165dcc;
+}
+
+.links a {
+  white-space: nowrap;
+}
+
+.field-error {
+  margin: 0.35rem 0 0;
+  color: #a22020;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.section-heading h2 {
+  margin-bottom: 0;
+}
+
+.count {
+  color: #52627a;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.user {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 0.65rem;
+  margin-top: 0.65rem;
+  align-items: start;
+}
+
+.user > button {
+  margin-top: 1.65rem;
+}
+
+button {
+  min-height: 2.7rem;
+  padding: 0.55rem 0.9rem;
+  border: 0;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  font-weight: 750;
+}
+
+button.primary {
+  width: 100%;
+  margin-top: 0.5rem;
+  background: #165dcc;
+  color: #fff;
+}
+
+button.secondary,
+label.secondary {
+  background: #e8eef7;
+  color: #203452;
+}
+
+button.danger {
+  background: #fae8e8;
+  color: #8c2525;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+label.file-button {
+  padding: 0.65rem 0.9rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+#quota {
+  color: #52627a;
+}
+
+#status {
+  min-height: 1.5rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#csv-feedback.error {
+  color: #a22020;
+  font-weight: 700;
+}
+
+.csv-preview {
+  margin-top: 0.85rem;
+  padding: 0.85rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.55rem;
+  background: #f8fafc;
+  overflow-x: auto;
+}
+
+.csv-preview p {
+  margin: 0 0 0.55rem;
+}
+
+.csv-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.csv-preview th,
+.csv-preview td {
+  padding: 0.45rem 0.55rem;
+  border-top: 1px solid #dce3ed;
+  text-align: left;
+  vertical-align: top;
+}
+
+.csv-preview .valid {
+  color: #17613a;
+  font-weight: 700;
+}
+
+.csv-preview .invalid {
+  color: #a22020;
+  font-weight: 700;
+}
+
+.warning {
+  margin: 0 0 1rem;
+  padding: 0.8rem 0.9rem;
+  background: #fff7e8;
+  border: 1px solid #e6c98a;
+  border-radius: 0.55rem;
+  color: #6b4a05;
+}
+
+.opt-in-feature {
+  padding: 0.85rem 0 0;
+  border-top: 1px solid #e6ebf2;
+}
+
+.opt-in-feature:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.opt-in-toggle {
+  display: block;
+  margin-bottom: 0.3rem;
+}
+
+.feature-option-row {
+  margin: 0.5rem 0 0.85rem 1.4rem;
+}
+
+.feature-option-row label {
+  font-weight: 500;
+}
+
+details.optional > summary {
+  font-weight: 700;
+  cursor: pointer;
+}
+
+details.optional[open] > summary {
+  margin-bottom: 0.3rem;
+}
+
+.result {
+  padding: 1rem;
+  background: #eef8f2;
+  border: 1px solid #b9dec6;
+  border-radius: 0.55rem;
+}
+
+.result .warning {
+  margin-top: 0.9rem;
+}
+
+.credential {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+
+code {
+  word-break: break-all;
+  user-select: all;
+}
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+@media (max-width: 42rem) {
+  .grid,
+  .user {
+    grid-template-columns: 1fr;
+  }
+
+  .user > button {
+    margin-top: 0;
+  }
+
+  .credential {
+    grid-template-columns: 1fr;
+  }
+}

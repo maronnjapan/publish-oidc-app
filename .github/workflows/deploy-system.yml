@@ -6,8 +6,13 @@ on:
     branches: [main]
     paths:
       - "system/**"
-      # The portal renders its experimental section from this catalog at build time.
+      # The portal renders its form from these catalogs at build time, so an edit to one of
+      # them only reaches the deployed portal through a rebuild.
+      - "portal-choices.json"
       - "experimental-features.json"
+      - "optional-features.json"
+      - "infra.json"
+      - "scripts/portal-build.mjs"
       - "scripts/deploy-portal.mjs"
       - "scripts/deploy-reaper.mjs"
       - "scripts/setup.mjs"

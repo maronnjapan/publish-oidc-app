@@ -1,26 +1,38 @@
 import assert from "node:assert/strict";
-import { access, mkdtemp, readFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { access, readFile } from "node:fs/promises";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
-import { build } from "esbuild";
-import { choiceGroup, readChoiceCatalog, readExperimentalCatalog, readOptionalCatalog, supportedFeatures, validateLinks } from "../scripts/lib.mjs";
+import {
+  choiceGroup,
+  readChoiceCatalog,
+  readExperimentalCatalog,
+  readOptionalCatalog,
+  supportedFeatures,
+  validateLinks,
+} from "../scripts/lib.mjs";
+import { importModules, portalHtml } from "./support/build.mjs";
 
-const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "oidc-choices-test-"));
-const output = path.join(temporaryDirectory, "portal.mjs");
-await build({ entryPoints: [path.resolve("system/portal/src/index.ts")], bundle: true, platform: "node", format: "esm", outfile: output });
-const { CHOICE_GROUPS, FEATURE_NAMES, HTML, OPTIONAL_SCOPES, choiceItems, linkHref } = await import(`${pathToFileURL(output).href}?${Date.now()}`);
+/**
+ * The catalogs are the single source of truth for what the form offers and for how each
+ * item is described. These tests are about the catalog contract itself — that its ids match
+ * the lists the code enforces, and that every link it declares resolves to something real.
+ * What the rendered form does with them is test/portal-ui.test.mjs.
+ */
+
+const { catalog: portalCatalog, rules } = await importModules({
+  catalog: "system/portal/src/shared/catalog.ts",
+  rules: "system/portal/src/shared/rules.ts",
+});
+const { CHOICE_GROUPS, choiceItems, linkHref } = portalCatalog;
+const { FEATURE_NAMES, OPTIONAL_SCOPES, REQUIRED_SCOPE } = rules;
 
 const catalog = await readChoiceCatalog();
 const infra = JSON.parse(await readFile("infra.json", "utf8"));
+const experimentalCatalog = await readExperimentalCatalog();
+const optionalCatalog = await readOptionalCatalog();
 
 function everyItem() {
   return catalog.groups.flatMap((group) => group.items.map((item) => ({ group: group.id, item })));
 }
-
-const experimentalCatalog = await readExperimentalCatalog();
-const optionalCatalog = await readOptionalCatalog();
 
 test("every selectable item carries a one-line summary", () => {
   // readChoiceCatalog() enforces the shape; this asserts the catalog actually covers the
@@ -39,7 +51,7 @@ test("every selectable item carries a one-line summary", () => {
 test("catalog ids match the lists the portal, generator and follow-up check enforce", async () => {
   const ids = (groupId) => choiceGroup(catalog, groupId).items.map((item) => item.id);
   assert.deepEqual(ids("client-type"), ["public", "confidential"]);
-  assert.deepEqual(ids("scope"), ["openid", ...OPTIONAL_SCOPES]);
+  assert.deepEqual(ids("scope"), [REQUIRED_SCOPE, ...OPTIONAL_SCOPES]);
   assert.deepEqual(ids("feature"), [...FEATURE_NAMES]);
 
   // The generator and the weekly follow-up keep their own copies of the feature list; a
@@ -77,30 +89,30 @@ test("a malformed link is rejected instead of rendered", () => {
   assert.throws(() => validateLinks([{ url: "https://example.com" }], "test"), /needs a label/);
 });
 
-test("links are optional: an item without them renders no anchor", () => {
+test("links are optional: an item without them renders no anchor", async () => {
+  const html = await portalHtml();
   // PAR's `required` option is the live example of a described choice with no link.
-  const optionRow = HTML.slice(HTML.indexOf('data-option="required"'), HTML.indexOf('data-option="required"') + 600);
+  const optionRow = html.slice(html.indexOf('data-option="required"'), html.indexOf('data-option="required"') + 600);
   assert.match(optionRow, /require_pushed_authorization_requests=true/);
   assert.doesNotMatch(optionRow.slice(0, optionRow.indexOf("</div>")), /<a /);
   assert.equal(linkHref({ label: "no target" }), null);
   assert.equal(linkHref({ label: "empty doc", doc: "" }), null);
 });
 
-test("the form shows every summary, and every link opens safely in a new tab", () => {
-  for (const { group, item } of everyItem()) {
-    assert.ok(HTML.includes(item.summary), `${group}.${item.id} summary is missing from the form`);
-    for (const link of item.links ?? []) {
-      assert.ok(HTML.includes(`href="${linkHref(link)}" target="_blank" rel="noopener noreferrer"`), `${group}.${item.id} link ${link.label} is missing from the form`);
-    }
-  }
-  for (const feature of [...supportedFeatures(experimentalCatalog), ...supportedFeatures(optionalCatalog)]) {
-    for (const link of feature.links ?? []) {
-      assert.ok(HTML.includes(`href="${linkHref(link)}" target="_blank" rel="noopener noreferrer"`), `${feature.id} link ${link.label} is missing from the form`);
-    }
-  }
-  // Every anchor is external, so none of them may leak the portal URL or keep an opener.
-  for (const [, attributes] of HTML.matchAll(/<a ([^>]*)>/g)) {
-    assert.match(attributes, /rel="noopener noreferrer"/);
+test("every declared link reaches the form", async () => {
+  const html = await portalHtml();
+  const declared = [
+    ...everyItem().flatMap(({ item }) => item.links ?? []),
+    ...[...supportedFeatures(experimentalCatalog), ...supportedFeatures(optionalCatalog)].flatMap((feature) => [
+      ...(feature.links ?? []),
+      ...(feature.options ?? []).flatMap((option) => option.links ?? []),
+    ]),
+  ];
+  for (const link of declared) {
+    assert.ok(
+      html.includes(`href="${linkHref(link)}" target="_blank" rel="noopener noreferrer"`),
+      `link ${link.label} is missing from the form`,
+    );
   }
 });
 

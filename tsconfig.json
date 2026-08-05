@@ -3,16 +3,21 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2022", "WebWorker"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["@cloudflare/workers-types"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
     "strict": true,
+    "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
     "noEmit": true,
     "skipLibCheck": true
   },
+  "//lib": "The portal ships browser code (the Preact form) and Worker code from one source tree, so both DOM and the Workers runtime types are needed; skipLibCheck keeps their overlapping declarations from fighting.",
   "//": "The Cloudflare templates import their generated siblings (./store.js, ./oidc-provider/apply.js) and only resolve once an OP has been generated. test/generator.test.mjs type-checks a generated app instead.",
   "include": [
-    "system/**/*.ts"
+    "system/**/*.ts",
+    "system/**/*.tsx"
   ],
   "exclude": ["apps", "dist", "node_modules"]
 }

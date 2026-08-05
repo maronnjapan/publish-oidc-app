@@ -1,326 +1,354 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
-import vm from "node:vm";
-import { build } from "esbuild";
+import { SqliteD1 } from "./support/d1-sqlite.mjs";
+import { importModules, importPortal } from "./support/build.mjs";
 
-const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "oidc-portal-test-"));
-const output = path.join(temporaryDirectory, "portal.mjs");
-await build({ entryPoints: [path.resolve("system/portal/src/index.ts")], bundle: true, platform: "node", format: "esm", outfile: output });
-const { HTML, allocateOpId, applyRateLimit, hashPassword, ipKey, parseInput, route, validateInput, validateRedirectUrl } = await import(`${pathToFileURL(output).href}?${Date.now()}`);
+/**
+ * The portal Worker over HTTP, against a real SQLite database behind the D1 interface.
+ * Every assertion here is about what a caller sees and what ends up in the database, so the
+ * routing, validation and persistence layers are all exercised as they are deployed.
+ */
 
-class MockDatabase {
-  counters = new Map();
-  requests = new Map();
-  users = [];
-
-  prepare(sql) {
-    const database = this;
-    return {
-      bind(...params) {
-        return {
-          async first() {
-            if (sql.includes("INSERT INTO registry_rate_limits")) {
-              const key = params.join("|");
-              const count = (database.counters.get(key) ?? 0) + 1;
-              database.counters.set(key, count);
-              return { count };
-            }
-            if (sql.includes("SELECT count FROM registry_rate_limits")) return { count: database.counters.get(["ip", ...params].join("|")) ?? 0 };
-            if (sql.includes("FROM registry_requests WHERE request_id")) return database.requests.get(params[0]) ?? null;
-            return null;
-          },
-          async run() {
-            if (sql.includes("SET count = CASE")) {
-              const key = ["ip", ...params].join("|");
-              database.counters.set(key, Math.max(0, (database.counters.get(key) ?? 0) - 1));
-            } else if (sql.includes("INSERT INTO registry_requests")) {
-              database.requests.set(params[0], { request_id: params[0], status: "pending", op_id: params[1], name: params[2], config_json: params[3], ip_key: params[4], created_at: params[5], url: null, error: null });
-            } else if (sql.includes("INSERT INTO oidc_users")) {
-              database.users.push({ op_id: params[0], username: params[1], password_hash: params[2], password_salt: params[3], iterations: params[4], claims_json: params[5] });
-            } else if (sql.includes("UPDATE registry_requests SET status = 'failed'")) {
-              const row = database.requests.get(params[0]);
-              if (row) Object.assign(row, { status: "failed", error: "dispatch_failed", config_json: null });
-            } else if (sql.includes("DELETE FROM oidc_users")) {
-              database.users = database.users.filter((user) => user.op_id !== params[0]);
-            }
-            return { success: true };
-          },
-        };
-      },
-    };
-  }
-
-  async batch(statements) {
-    for (const statement of statements) await statement.run();
-    return statements.map(() => ({ success: true }));
-  }
-}
+const { default: app } = await importPortal();
+const { credentials, db, ip, rateLimit } = await importModules({
+  credentials: "system/portal/src/server/services/credentials.ts",
+  db: "system/db/client.ts",
+  ip: "system/portal/src/server/ip.ts",
+  rateLimit: "system/portal/src/server/services/rate-limit.ts",
+});
+const { ipKey } = ip;
+const { createDb } = db;
 
 const features = { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true };
-function createBody(clientType = "public") {
-  return { name: "Demo OP", redirect_url: "https://client.example/callback", client_type: clientType, scopes: ["openid", "profile", "email"], features, users: [{ username: "alice", password: "correct-horse-battery" }] };
+
+function createBody(clientType = "public", overrides = {}) {
+  return {
+    name: "Demo OP",
+    redirect_url: "https://client.example/callback",
+    client_type: clientType,
+    scopes: ["openid", "profile", "email"],
+    features,
+    users: [{ username: "alice", password: "correct-horse-battery" }],
+    ...overrides,
+  };
 }
 
-function createRequest(body) {
-  return new Request("https://portal.example/api/apps", { method: "POST", headers: { host: "portal.example", origin: "https://portal.example", "content-type": "application/json", "cf-connecting-ip": "203.0.113.7" }, body: JSON.stringify(body) });
+function createRequest(body, headers = {}) {
+  return new Request("https://portal.example/api/apps", {
+    method: "POST",
+    headers: {
+      host: "portal.example",
+      origin: "https://portal.example",
+      "content-type": "application/json",
+      "cf-connecting-ip": "203.0.113.7",
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
 }
 
-function env(DB) {
-  return { DB, RATE_LIMIT_PER_IP_PER_DAY: "10", RATE_LIMIT_GLOBAL_PER_DAY: "50", GITHUB_OWNER: "owner", GITHUB_REPO: "repo", GITHUB_DISPATCH_TOKEN: "token" };
+function environment(DB = new SqliteD1()) {
+  return {
+    DB,
+    RATE_LIMIT_PER_IP_PER_DAY: "10",
+    RATE_LIMIT_GLOBAL_PER_DAY: "50",
+    GITHUB_OWNER: "owner",
+    GITHUB_REPO: "repo",
+    GITHUB_DISPATCH_TOKEN: "token",
+  };
 }
 
-test("the UI contains redirect URL, scopes, client type, feature, account, and CSV controls", () => {
-  for (const marker of ["redirect-url", "client-type", "offline_access", "refresh-token", "add-user", "type=\"file\"", "username,password", "CSVプレビュー", "user-count"]) assert.match(HTML, new RegExp(marker));
+/** Runs a request with the GitHub dispatch stubbed out, since no test may reach the network. */
+async function withDispatch(status, run) {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init });
+    return new Response(null, { status });
+  };
+  try {
+    return await run(calls);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+test("the daily quota is reported per IP and starts full", async () => {
+  const env = environment();
+  const response = await app.fetch(
+    new Request("https://portal.example/api/quota", { headers: { "cf-connecting-ip": "203.0.113.7" } }),
+    env,
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { limit: 10, used: 0, remaining: 10 });
+  assert.equal(response.headers.get("cache-control"), "no-store");
 });
 
-test("the inline portal script is valid JavaScript", () => {
-  const script = HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1];
-  assert.ok(script);
-  assert.doesNotThrow(() => new vm.Script(script));
+test("a public creation returns no secret and writes a hashed account to D1", async () => {
+  const env = environment();
+  const result = await withDispatch(204, async (calls) => {
+    const response = await app.fetch(createRequest(createBody("public")), env);
+    assert.equal(response.status, 202);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].url, /actions\/workflows\/generate-op\.yml\/dispatches$/);
+    return response.json();
+  });
+
+  assert.match(result.client_id, /^client_/);
+  assert.equal("client_secret" in result, false);
+
+  const [request] = env.DB.rows("SELECT * FROM registry_requests");
+  assert.equal(request.status, "pending");
+  assert.match(request.op_id, /^maronn-op-[a-z0-9]{10,16}$/);
+  assert.equal(request.ip_key, "203.0.113.7");
+  const config = JSON.parse(request.config_json);
+  assert.equal(config.client_type, "public");
+  assert.equal(config.redirect_url, "https://client.example/callback");
+  assert.deepEqual(config.scopes, ["openid", "profile", "email"]);
+
+  const [user] = env.DB.rows("SELECT * FROM oidc_users");
+  assert.equal(user.username, "alice");
+  assert.equal(user.op_id, request.op_id);
+  assert.notEqual(user.password_hash, "correct-horse-battery");
+  assert.equal(user.password_iterations, 1);
 });
 
-test("CSV parsing supports quoted fields and validates preview rows", () => {
-  const script = HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1];
-  const functions = script.slice(script.indexOf("function parseCsv"), script.indexOf("function renderCsvPreview"));
-  const usernameRule = script.match(/const USERNAME_RULE = \/.*\/;/)?.[0];
-  const context = {};
-  vm.runInNewContext(`${usernameRule}\n${functions}; this.parseCsv = parseCsv; this.validateCsvRows = validateCsvRows;`, context);
-  const rows = context.parseCsv('alice,"long,password"\r\nbob,password-123\n');
-  assert.deepEqual(Array.from(rows, (row) => Array.from(row)), [["alice", "long,password"], ["bob", "password-123"]]);
-  assert.deepEqual(Array.from(context.validateCsvRows(rows), ({ username, errors }) => ({ username, errors: Array.from(errors) })), [
-    { username: "alice", errors: [] },
-    { username: "bob", errors: [] },
-  ]);
-  const invalid = context.validateCsvRows(context.parseCsv('same,short\nsame,password-123'));
-  assert.match(invalid[0].errors.join(" "), /8〜128/);
-  assert.match(invalid[1].errors.join(" "), /重複/);
-  assert.throws(() => context.parseCsv('alice,"unterminated'), /引用符/);
+test("a confidential creation returns a one-time client secret that CI can read back", async () => {
+  const env = environment();
+  const result = await withDispatch(204, async () => (await app.fetch(createRequest(createBody("confidential")), env)).json());
+  assert.match(result.client_secret, /^[A-Za-z0-9_-]{40,}$/);
+  const [request] = env.DB.rows("SELECT config_json FROM registry_requests");
+  assert.equal(JSON.parse(request.config_json).client_secret, result.client_secret);
 });
 
-test("redirect URLs allow HTTPS and localhost HTTP but reject fragments and remote HTTP", () => {
-  assert.equal(validateRedirectUrl("https://example.com/callback"), "https://example.com/callback");
-  assert.equal(validateRedirectUrl("http://localhost:3000/callback"), "http://localhost:3000/callback");
-  assert.equal(validateRedirectUrl("http://example.com/callback"), null);
-  assert.equal(validateRedirectUrl("https://example.com/callback#fragment"), null);
+test("usernames are trimmed before storage so padded input is accepted", async () => {
+  const env = environment();
+  await withDispatch(204, () =>
+    app.fetch(createRequest(createBody("public", { users: [{ username: "  alice  ", password: "correct-horse-battery" }] })), env),
+  );
+  assert.equal(env.DB.rows("SELECT username FROM oidc_users")[0].username, "alice");
 });
 
-test("input validation enforces selected scopes, feature consistency, unique users, and five-account limit", () => {
-  assert.ok(validateInput(createBody()));
-  assert.equal(validateInput({ ...createBody(), scopes: ["openid", "offline_access"], features: { ...features, "refresh-token": false } }), null);
-  assert.equal(validateInput({ ...createBody(), scopes: ["openid", "unknown"] }), null);
-  assert.equal(validateInput({ ...createBody(), users: Array.from({ length: 6 }, (_, index) => ({ username: `user${index}`, password: "password-123" })) }), null);
-  assert.equal(validateInput({ ...createBody(), users: [{ username: "same", password: "password-123" }, { username: "same", password: "password-456" }] }), null);
+test("the creation status the browser polls exposes no configuration", async () => {
+  const env = environment();
+  const created = await withDispatch(204, async () => (await app.fetch(createRequest(createBody()), env)).json());
+  const response = await app.fetch(new Request(`https://portal.example/api/requests/${created.request_id}`), env);
+  assert.equal(response.status, 200);
+  const status = await response.json();
+  assert.deepEqual(Object.keys(status).sort(), ["created_at", "error", "op_id", "request_id", "status", "url"]);
+  assert.equal(status.status, "pending");
 });
 
-test("every HTML validation pattern compiles as a browser unicodeSets regular expression", () => {
-  const script = HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1];
-  const patterns = [
-    ...HTML.matchAll(/\spattern="([^"]*)"/g),
-    ...script.matchAll(/\.pattern\s*=\s*'([^']*)'/g),
-  ].map((match) => match[1]);
-  for (const pattern of patterns) assert.doesNotThrow(() => new RegExp(`^(?:${pattern})$`, "v"), `pattern ${pattern} is ignored by browsers that compile it with the v flag`);
-});
-
-test("display names accept multibyte text and reject control characters or overlong values", () => {
-  assert.equal(parseInput({ ...createBody(), name: "テスト用OP" }).value.name, "テスト用OP");
-  assert.equal(parseInput({ ...createBody(), name: "  余白付き  " }).value.name, "余白付き");
-  assert.equal(parseInput({ ...createBody(), name: "あ".repeat(40) }).ok, true);
-  assert.equal(parseInput({ ...createBody(), name: "あ".repeat(41) }).ok, false);
-  assert.equal(parseInput({ ...createBody(), name: "line\nbreak" }).ok, false);
+test("an unknown or malformed request id is a 404, not a database lookup", async () => {
+  const env = environment();
+  for (const id of ["not-a-uuid", "00000000-0000-4000-8000-000000000000"]) {
+    const response = await app.fetch(new Request(`https://portal.example/api/requests/${id}`), env);
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).error, "not_found");
+  }
 });
 
 test("rejected creations report the offending field instead of a generic message", async () => {
   const cases = [
-    [{ ...createBody(), redirect_url: "http://example.com/callback" }, /redirect URL/],
-    [{ ...createBody(), client_type: "native" }, /client type/],
-    [{ ...createBody(), scopes: ["openid", "unknown"] }, /scope "unknown"/],
-    [{ ...createBody(), scopes: ["openid", "offline_access"], features: { ...features, "refresh-token": false } }, /offline_access/],
-    [{ ...createBody(), users: [{ username: "たろう", password: "password-123" }] }, /user 1 username/],
-    [{ ...createBody(), users: [{ username: "alice", password: "short" }] }, /user 1 password/],
-    [{ ...createBody(), users: [{ username: "same", password: "password-123" }, { username: "same", password: "password-456" }] }, /registered twice/],
+    [createBody("public", { redirect_url: "http://example.com/callback" }), /redirect URL/],
+    [createBody("native"), /client type/],
+    [createBody("public", { scopes: ["openid", "unknown"] }), /scope "unknown"/],
+    [createBody("public", { scopes: ["openid", "offline_access"], features: { ...features, "refresh-token": false } }), /offline_access/],
+    [createBody("public", { users: [{ username: "たろう", password: "password-123" }] }), /user 1 username/],
+    [createBody("public", { users: [{ username: "alice", password: "short" }] }), /user 1 password/],
+    [
+      createBody("public", {
+        users: [
+          { username: "same", password: "password-123" },
+          { username: "same", password: "password-456" },
+        ],
+      }),
+      /registered twice/,
+    ],
+    [createBody("public", { name: "line\nbreak" }), /display name/],
   ];
   for (const [body, expected] of cases) {
-    const response = await route(createRequest(body), { DB: { prepare() { throw new Error("must not access D1"); } } });
+    const env = environment();
+    const response = await app.fetch(createRequest(body), env);
     const result = await response.json();
-    assert.equal(response.status, 400);
+    assert.equal(response.status, 400, result.message);
     assert.equal(result.error, "invalid_input");
     assert.match(result.message, expected);
+    assert.equal(env.DB.count("registry_requests"), 0, "an invalid body must not reach the database");
+    assert.equal(env.DB.count("registry_rate_limits"), 0, "an invalid body must not spend the caller's quota");
   }
 });
 
-test("usernames are trimmed before storage so padded input is accepted", async () => {
-  const DB = new MockDatabase();
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response(null, { status: 204 });
-  try {
-    const response = await route(createRequest({ ...createBody(), users: [{ username: "  alice  ", password: "correct-horse-battery" }] }), env(DB));
-    assert.equal(response.status, 202);
-    assert.equal(DB.users[0].username, "alice");
-  } finally { globalThis.fetch = originalFetch; }
+test("Origin is checked before anything is read or written", async () => {
+  const env = environment();
+  const response = await app.fetch(
+    new Request("https://portal.example/api/apps", {
+      method: "POST",
+      headers: { host: "portal.example", origin: "https://evil.example", "content-type": "application/json" },
+      body: JSON.stringify(createBody()),
+    }),
+    env,
+  );
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).error, "origin_mismatch");
+  assert.equal(env.DB.count("registry_requests"), 0);
 });
 
-test("the inline script enforces the same redirect URL and account rules as the Worker", () => {
-  const script = HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1];
-  const source = script.slice(script.indexOf("function redirectUrlError"), script.indexOf("function validateRedirectField"));
-  const context = { URL };
-  vm.runInNewContext(`${source}; this.redirectUrlError = redirectUrlError;`, context);
-  for (const url of ["https://example.com/callback", "http://localhost:3000/callback"]) {
-    assert.equal(context.redirectUrlError(url), "");
-    assert.equal(validateRedirectUrl(url), url);
-  }
-  for (const url of ["http://example.com/callback", "https://example.com/callback#fragment", "https://user:pass@example.com/callback", "not-a-url"]) {
-    assert.notEqual(context.redirectUrlError(url), "");
-    assert.equal(validateRedirectUrl(url), null);
-  }
-  const usernameRule = script.match(/const USERNAME_RULE = (\/.*\/);/)?.[1];
-  assert.equal(usernameRule, "/^[a-zA-Z0-9._@-]{1,64}$/");
+test("an oversized body is refused without being parsed", async () => {
+  const env = environment();
+  const response = await app.fetch(createRequest(createBody(), { "content-length": "20001" }), env);
+  assert.equal(response.status, 413);
+  assert.equal((await response.json()).error, "payload_too_large");
+});
+
+test("a body that is not JSON is a 400 that names the problem", async () => {
+  const env = environment();
+  const response = await app.fetch(
+    new Request("https://portal.example/api/apps", {
+      method: "POST",
+      headers: { host: "portal.example", origin: "https://portal.example", "content-type": "application/json" },
+      body: "{",
+    }),
+    env,
+  );
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).message, /valid JSON/);
+});
+
+test("a creation that cannot start CI is rolled back rather than left pending", async () => {
+  const env = environment();
+  const response = await withDispatch(500, () => app.fetch(createRequest(createBody()), env));
+  assert.equal(response.status, 502);
+  assert.equal((await response.json()).error, "dispatch_failed");
+  const [request] = env.DB.rows("SELECT status, error, config_json FROM registry_requests");
+  assert.equal(request.status, "failed");
+  assert.equal(request.error, "dispatch_failed");
+  assert.equal(request.config_json, null, "the client secret must not survive a failed dispatch");
+  assert.equal(env.DB.count("oidc_users"), 0);
+});
+
+test("per-IP rate limiting rejects the eleventh creation and says when to come back", async () => {
+  const env = environment();
+  await withDispatch(204, async () => {
+    for (let index = 0; index < 10; index += 1) {
+      assert.equal((await app.fetch(createRequest(createBody()), env)).status, 202);
+    }
+    const response = await app.fetch(createRequest(createBody()), env);
+    assert.equal(response.status, 429);
+    assert.equal((await response.json()).error, "rate_limited");
+    assert.match(response.headers.get("retry-after"), /^\d+$/);
+  });
+});
+
+test("the global limit rejecting a request gives the caller's own quota back", async () => {
+  const DB = new SqliteD1();
+  const env = { ...environment(DB), RATE_LIMIT_GLOBAL_PER_DAY: "1" };
+  const db = createDb(DB);
+  const date = rateLimit.utcDate();
+  assert.equal(await rateLimit.applyRateLimit(db, env, "203.0.113.7", date), true);
+  assert.equal(await rateLimit.applyRateLimit(db, env, "198.51.100.9", date), false);
+  const rows = Object.fromEntries(
+    DB.rows("SELECT scope, key, count FROM registry_rate_limits").map((row) => [`${row.scope}:${row.key}`, row.count]),
+  );
+  assert.equal(rows["ip:198.51.100.9"], 0, "the rejected caller keeps its quota");
+  assert.equal(rows["ip:203.0.113.7"], 1);
+  assert.equal(rows["global:*"], 2);
 });
 
 test("IP keys retain IPv4 and aggregate IPv6 by canonical /64", () => {
   assert.equal(ipKey("203.0.113.7"), "203.0.113.7");
   assert.equal(ipKey("2001:0DB8:0012:0034:abcd::1"), "2001:db8:12:34::/64");
   assert.equal(ipKey("999.1.1.1"), "invalid");
+  assert.equal(ipKey(null), "unknown");
 });
 
-test("per-IP rate limiting rejects the eleventh request", async () => {
-  const DB = new MockDatabase();
-  for (let index = 0; index < 10; index += 1) assert.equal(await applyRateLimit(env(DB), "203.0.113.7", "2026-07-23"), true);
-  assert.equal(await applyRateLimit(env(DB), "203.0.113.7", "2026-07-23"), false);
+test("the retry-after lands on the next UTC midnight", () => {
+  assert.equal(rateLimit.retryAfterUtcMidnight(new Date("2026-07-23T23:59:00Z")), "60");
+  assert.equal(rateLimit.retryAfterUtcMidnight(new Date("2026-07-23T00:00:00Z")), String(24 * 60 * 60));
 });
 
 test("password hashing uses salted SHA-256 and does not retain plaintext", async () => {
-  const first = await hashPassword("password-123");
-  const second = await hashPassword("password-123");
+  const first = await credentials.hashPassword("password-123");
+  const second = await credentials.hashPassword("password-123");
   assert.notEqual(first.salt, second.salt);
   assert.notEqual(first.hash, "password-123");
-  const expected = await crypto.subtle.digest("SHA-256", Buffer.concat([Buffer.from(first.salt, "base64url"), Buffer.from("password-123")]));
+  const expected = await crypto.subtle.digest(
+    "SHA-256",
+    Buffer.concat([Buffer.from(first.salt, "base64url"), Buffer.from("password-123")]),
+  );
   assert.equal(first.hash, Buffer.from(expected).toString("base64url"));
   assert.equal(first.iterations, 1);
 });
 
-test("public creation returns no secret and writes a hashed D1 user", async () => {
-  const DB = new MockDatabase();
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response(null, { status: 204 });
-  try {
-    const response = await route(createRequest(createBody("public")), env(DB));
-    assert.equal(response.status, 202);
-    const result = await response.json();
-    assert.match(result.client_id, /^client_/);
-    assert.equal("client_secret" in result, false);
-    assert.equal(DB.requests.size, 1);
-    assert.equal(DB.users.length, 1);
-    assert.notEqual(DB.users[0].password_hash, "correct-horse-battery");
-    const config = JSON.parse([...DB.requests.values()][0].config_json);
-    assert.equal(config.client_type, "public");
-    assert.equal(config.redirect_url, "https://client.example/callback");
-    assert.deepEqual(config.scopes, ["openid", "profile", "email"]);
-  } finally { globalThis.fetch = originalFetch; }
-});
-
-test("confidential creation returns a one-time client secret", async () => {
-  const DB = new MockDatabase();
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response(null, { status: 204 });
-  try {
-    const response = await route(createRequest(createBody("confidential")), env(DB));
-    const result = await response.json();
-    assert.equal(response.status, 202);
-    assert.match(result.client_secret, /^[A-Za-z0-9_-]{40,}$/);
-    assert.equal(JSON.parse([...DB.requests.values()][0].config_json).client_secret, result.client_secret);
-  } finally { globalThis.fetch = originalFetch; }
-});
-
-test("Origin is checked before D1 or dispatch", async () => {
-  const response = await route(new Request("https://portal.example/api/apps", { method: "POST", headers: { host: "portal.example", origin: "https://evil.example", "content-type": "application/json" }, body: JSON.stringify(createBody()) }), { DB: { prepare() { throw new Error("must not access D1"); } } });
-  assert.equal(response.status, 403);
-});
-
-test("allocated OP id is the Worker subdomain label and namespace key", () => {
-  assert.match(allocateOpId(1784764800000), /^maronn-op-[a-z0-9]{10,16}$/);
-});
-
-test("the UI offers every supported experimental feature and warns that they are unstable", async () => {
-  const catalog = JSON.parse(await readFile("experimental-features.json", "utf8"));
-  const supported = catalog.features.filter((feature) => feature.status === "supported");
-  assert.ok(supported.length > 0);
-  for (const feature of supported) {
-    assert.match(HTML, new RegExp(`class="experimental-toggle-input" type="checkbox" value="${feature.id}"`));
-    for (const option of feature.options ?? []) assert.match(HTML, new RegExp(`data-feature="${feature.id}" data-option="${option.id}"`));
+test("an allocated OP id is a valid Worker subdomain label and namespace key", () => {
+  for (let index = 0; index < 50; index += 1) {
+    assert.match(credentials.allocateOpId(1784764800000 + index * 1000), /^maronn-op-[a-z0-9]{10,16}$/);
   }
-  for (const detected of catalog.features.filter((feature) => feature.status !== "supported")) {
-    assert.doesNotMatch(HTML, new RegExp(`value="${detected.id}" data-label=`), "features that are not wired up must not be selectable");
-  }
-  assert.match(HTML, /他の機能より適切に動作しない可能性が高い/);
-  assert.match(HTML, /@maronn-openid-connect\/experimental はAPIが安定しておらず/);
 });
 
-test("experimental selections are validated against the catalog and defaulted", () => {
-  assert.deepEqual(parseInput(createBody()).value.experimental, {});
-  assert.deepEqual(parseInput({ ...createBody(), experimental: { par: {} } }).value.experimental, { par: { required: false } });
-  assert.deepEqual(parseInput({ ...createBody(), experimental: { par: { required: true } } }).value.experimental, { par: { required: true } });
-  assert.match(parseInput({ ...createBody(), experimental: { unknown: {} } }).message, /experimental feature "unknown"/);
-  assert.match(parseInput({ ...createBody(), experimental: { par: { nope: true } } }).message, /experimental option "par.nope"/);
-  assert.match(parseInput({ ...createBody(), experimental: { par: { required: "yes" } } }).message, /must be true or false/);
-  assert.match(parseInput({ ...createBody(), experimental: [] }).message, /experimental must be an object/);
-});
-
-test("the experimental selection reaches the deployment config", async () => {
-  const DB = new MockDatabase();
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response(null, { status: 204 });
-  try {
-    const response = await route(createRequest({ ...createBody(), experimental: { par: { required: true } } }), env(DB));
+test("opt-in selections are validated against their catalogs and reach the deployment config", async () => {
+  const env = environment();
+  await withDispatch(204, async () => {
+    const response = await app.fetch(
+      createRequest(createBody("public", { experimental: { par: { required: true } }, optional: { "transaction-binding": {} } })),
+      env,
+    );
     assert.equal(response.status, 202);
-    assert.deepEqual(JSON.parse([...DB.requests.values()][0].config_json).experimental, { par: { required: true } });
-  } finally { globalThis.fetch = originalFetch; }
+  });
+  const config = JSON.parse(env.DB.rows("SELECT config_json FROM registry_requests")[0].config_json);
+  assert.deepEqual(config.experimental, { par: { required: true } });
+  assert.deepEqual(config.optional, { "transaction-binding": {} });
 });
 
-test("the UI offers every supported optional feature, folded away by default", async () => {
-  const catalog = JSON.parse(await readFile("optional-features.json", "utf8"));
-  const supported = catalog.features.filter((feature) => feature.status === "supported");
-  assert.ok(supported.length > 0);
-  for (const feature of supported) {
-    assert.match(HTML, new RegExp(`class="optional-toggle-input" type="checkbox" value="${feature.id}"`));
-    for (const option of feature.options ?? []) assert.match(HTML, new RegExp(`data-feature="${feature.id}" data-option="${option.id}"`));
+test("an id may not cross between the optional and experimental groups", async () => {
+  const cases = [
+    [{ optional: { par: {} } }, /optional feature "par"/],
+    [{ experimental: { "transaction-binding": {} } }, /experimental feature "transaction-binding"/],
+    [{ experimental: { par: { nope: true } } }, /experimental option "par\.nope"/],
+    [{ experimental: { par: { required: "yes" } } }, /must be true or false/],
+    [{ experimental: [] }, /experimental must be an object/],
+  ];
+  for (const [overrides, expected] of cases) {
+    const response = await app.fetch(createRequest(createBody("public", overrides)), environment());
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).message, expected);
   }
-  for (const detected of catalog.features.filter((feature) => feature.status !== "supported")) {
-    assert.doesNotMatch(HTML, new RegExp(`value="${detected.id}" data-label=`), "features that are not wired up must not be selectable");
+});
+
+test("every response carries the security headers, and the page forbids inline code", async () => {
+  const page = await app.fetch(new Request("https://portal.example/"), environment());
+  assert.equal(page.status, 200);
+  const policy = page.headers.get("content-security-policy");
+  assert.match(policy, /default-src 'none'/, "everything the page does must be named explicitly");
+  assert.match(policy, /script-src 'self'/);
+  assert.match(policy, /style-src 'self'/);
+  assert.match(policy, /connect-src 'self'/);
+  assert.doesNotMatch(policy, /unsafe-inline/, "the portal no longer needs inline scripts or styles");
+  assert.match(policy, /frame-ancestors 'none'/);
+  // The document names its assets by content hash; a cached copy would outlive them.
+  assert.equal(page.headers.get("cache-control"), "no-store");
+  assert.equal(page.headers.get("x-frame-options"), "DENY");
+  assert.equal(page.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(page.headers.get("referrer-policy"), "no-referrer");
+});
+
+test("the client bundle and stylesheet are served from content-addressed, immutable URLs", async () => {
+  const env = environment();
+  const html = await (await app.fetch(new Request("https://portal.example/"), env)).text();
+  const paths = [...html.matchAll(/(?:href|src)="(\/assets\/[^"]+)"/g)].map((match) => match[1]);
+  assert.equal(paths.length, 2, "the document should reference exactly one script and one stylesheet");
+  for (const path of paths) {
+    assert.match(path, /^\/assets\/app\.[0-9a-f]{16}\.(js|css)$/);
+    const response = await app.fetch(new Request(`https://portal.example${path}`), env);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("cache-control"), /immutable/);
+    assert.ok((await response.text()).length > 0);
   }
-  // Collapsed, not hidden: <details> without `open` keeps the toggles out of the way of
-  // the people who will never set them, while staying one click from anyone who will.
-  assert.match(HTML, /<details class="optional">/);
-  assert.doesNotMatch(HTML, /<details class="optional" open>/);
-  assert.match(HTML, /<summary>オプション機能（デフォルト無効/);
-  // The section must not borrow the experimental warning: these are stable features.
-  assert.doesNotMatch(HTML.slice(HTML.indexOf('<details class="optional">'), HTML.indexOf("</details>")), /他の機能より適切に動作しない/);
+  assert.equal((await app.fetch(new Request("https://portal.example/assets/app.0000000000000000.js"), env)).status, 404);
 });
 
-test("optional selections are validated against the catalog", () => {
-  assert.deepEqual(parseInput(createBody()).value.optional, {});
-  assert.deepEqual(parseInput({ ...createBody(), optional: { "transaction-binding": {} } }).value.optional, { "transaction-binding": {} });
-  assert.match(parseInput({ ...createBody(), optional: { unknown: {} } }).message, /optional feature "unknown"/);
-  assert.match(parseInput({ ...createBody(), optional: { "transaction-binding": { nope: true } } }).message, /optional option "transaction-binding.nope"/);
-  assert.match(parseInput({ ...createBody(), optional: [] }).message, /optional must be an object/);
-  // The two groups feed one --enable list but are validated separately, so an id may not
-  // cross over: asking for an experimental feature in the optional field is a rejection.
-  assert.match(parseInput({ ...createBody(), optional: { par: {} } }).message, /optional feature "par"/);
-  assert.match(parseInput({ ...createBody(), experimental: { "transaction-binding": {} } }).message, /experimental feature "transaction-binding"/);
-});
-
-test("the optional selection reaches the deployment config", async () => {
-  const DB = new MockDatabase();
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response(null, { status: 204 });
-  try {
-    const response = await route(createRequest({ ...createBody(), optional: { "transaction-binding": {} } }), env(DB));
-    assert.equal(response.status, 202);
-    const stored = JSON.parse([...DB.requests.values()][0].config_json);
-    assert.deepEqual(stored.optional, { "transaction-binding": {} });
-    assert.deepEqual(stored.experimental, {});
-  } finally { globalThis.fetch = originalFetch; }
+test("an unknown route answers with the API's error shape", async () => {
+  const response = await app.fetch(new Request("https://portal.example/nope"), environment());
+  assert.equal(response.status, 404);
+  assert.deepEqual(await response.json(), { error: "not_found", message: "route was not found" });
 });
