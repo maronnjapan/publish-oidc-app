@@ -33,6 +33,36 @@ Reaper Worker -----------+     15分ごとに期限切れOPを削除
 
 `POST /api/apps`はサーバー側でOP ID、Client ID、必要ならClient Secretを採番します。デプロイ設定は共有D1へ一時保存され、GitHub ActionsがWorker SecretへClient設定を登録した後、D1からClient Secretを除去します。ブラウザは作成レスポンスの資格情報をメモリだけに保持し、デプロイ完了時に表示します。
 
+### ポータルの構成
+
+| 層 | 使用ライブラリ | 置き場所 |
+|---|---|---|
+| ルーティング・ミドルウェア | [Hono](https://hono.dev) | `system/portal/src/server/` |
+| 入力検証 | [Zod](https://zod.dev) | `system/portal/src/shared/validation.ts` |
+| D1アクセス | [Drizzle ORM](https://orm.drizzle.team) | `system/db/` |
+| 画面 | [Preact](https://preactjs.com)（Worker側でSSR → ブラウザでhydrate） | `system/portal/src/ui/`, `system/portal/src/client/` |
+
+```text
+system/
+  db/                     共有D1のスキーマ（Drizzle）と、setupが流すDDL
+  portal/src/
+    index.ts              Workerのエントリ（Honoアプリを渡すだけ）
+    server/               ルート・ミドルウェア・サービス（D1、GitHub、レート制限）
+    shared/               ブラウザとWorkerが共有するルール・カタログ・Zodスキーマ
+    ui/                   Preactコンポーネントとフォームのreducer
+    client/main.tsx       ブラウザのエントリ（hydrate）
+    styles/app.css        スタイルシート
+  reaper/src/index.ts     15分ごとのcron
+```
+
+同じPreactコンポーネント木をWorkerが`preact-render-to-string`で描画し、ブラウザが`hydrate()`で引き継ぎます。初期状態はカタログとreducerだけから決まる（リクエスト固有の値を含まない）ため、サーバーが返したHTMLとブラウザの最初の描画は必ず一致します。日次残数だけはhydrate後に取得します。
+
+`hydrate()`は既にあるDOMを差分検査せずそのまま引き継ぐので、サーバーとブラウザの描画がずれても警告は出ません。そのため`test/portal-hydration.test.mjs`が、両者の要素構造とテキストが一致することを検査します。また、hydrate前に入力された値はreducerに入らず最初の再描画で消えてしまうため、フォームは`disabled`な状態で描画され、hydrate完了後に有効化されます。
+
+クライアントのJSとCSSは、esbuildが先にビルドしてハッシュ付きの`/assets/app.<hash>.js` / `.css`としてWorkerに埋め込みます（`scripts/portal-build.mjs`）。Workerは1モジュールでアップロードされるので静的アセットのバインディングは使えませんが、この形なら**インラインの`<script>`も`<style>`も不要**になり、CSPから`unsafe-inline`を外せます。
+
+入力ルール（リダイレクトURL、ユーザー名、パスワード、`offline_access`とRefresh Tokenの関係）は`shared/rules.ts`が単一の定義で、Workerは英語のAPIエラーへ、画面は日本語のフィールドエラーへそれぞれ翻訳します。以前は両側が同じ規則を別々に実装していました。
+
 ## セットアップ
 
 Node.js 22以上、Cloudflareアカウント、workers.devサブドメイン、GitHub CLIが必要です。対話ガイドが権限、Secrets、共有D1、検証、ポータルデプロイを案内します。
@@ -154,11 +184,11 @@ npm run build
 npm run check
 ```
 
-テストはポータル入力・CSV/UI、選択項目の説明とリンク、IP制限、資格情報の条件分岐、salt付きSHA-256、D1名前空間、CLI機能トグル、生成OPのWorkers bundleを検証します。生成物の`persistence.ts`はCLIが生成したストア契約に対して型検査され、契約が変わればCIで落ちます。experimentalについては、PARとToken Exchangeそれぞれを有効にしたOPを実際に生成・バンドルし、`POST /par`から`/token`までのフロー、`request_uri`の使い捨て（並行リクエスト含む）、必須モード、スコープ絞り込み交換まで通します。optionalについては、`transaction-binding`を有効にしたOPと無効なOPを生成し、Cookieを持つブラウザだけが認可コードを取得できること・他のトランザクションのCookieでは同意を代行できないことまで通します。あわせて固定CLIの`--help`を実行し、解釈できない見出しの分類が増えていないかも検査します。
+テストはポータル入力・CSV/UI、選択項目の説明とリンク、IP制限、資格情報の条件分岐、salt付きSHA-256、D1名前空間、CLI機能トグル、生成OPのWorkers bundleを検証します。ポータルとReaperのテストは`node:sqlite`の実データベースをD1インターフェースの裏に置いて動かすので（`test/support/d1-sqlite.mjs`）、SQLとして成立しないクエリはその場で落ちます。フォームのreducer・入力ルール・CSV・作成中のポーリングは、DOMを介さない単体テストです。共有D1のDDLとDrizzleスキーマが一致していることは`test/db-schema.test.mjs`が列単位で検査します。生成物の`persistence.ts`はCLIが生成したストア契約に対して型検査され、契約が変わればCIで落ちます。experimentalについては、PARとToken Exchangeそれぞれを有効にしたOPを実際に生成・バンドルし、`POST /par`から`/token`までのフロー、`request_uri`の使い捨て（並行リクエスト含む）、必須モード、スコープ絞り込み交換まで通します。optionalについては、`transaction-binding`を有効にしたOPと無効なOPを生成し、Cookieを持つブラウザだけが認可コードを取得できること・他のトランザクションのCookieでは同意を代行できないことまで通します。あわせて固定CLIの`--help`を実行し、解釈できない見出しの分類が増えていないかも検査します。
 
 ## セキュリティと運用
 
-- 作成APIは同一Originのみ許可し、CSP・frame拒否・no-storeを設定します。
+- 作成APIは同一Originのみ許可し、CSP・frame拒否・no-storeを設定します。CSPはインラインの`<script>`・`<style>`を一切許可しません（`script-src 'self'; style-src 'self'`）。
 - 既定上限は1 IPあたり10回/UTC日、全体50回/UTC日です。`RATE_LIMIT_PER_IP_PER_DAY`と`RATE_LIMIT_GLOBAL_PER_DAY`をポータル再デプロイ時に変更できます。
 - OPのRSA署名秘密鍵とClient設定は各Worker Secretに保存します。共有D1に残るClient設定からはデプロイ成功後にSecretを削除します。
 - 生成OPの状態はトークン文字列等をSHA-256で不可逆化したレコードキーとして共有D1へ保存します。

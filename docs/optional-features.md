@@ -73,7 +73,7 @@ CLIの `--enable` がそのIDを受け付けない場合はCLIの更新待ちで
 2. 分類ごとのカタログ（`optional-features.json` に倣ったJSON）と `scripts/lib.mjs` の読み込み関数を用意する。
 3. `collectReport()` に `compareCatalogToCli()` を使った比較を足し、`renderReport()` に節を足す。
 4. `scripts/generate-op.mjs` に配線テーブルを足し、`--enable` へ渡すIDの配列（`enabledIds`）に含める。
-5. ポータルの `featureToggles()` を再利用してUIを足す。既定で無効な分類なら `optionalCard()` に倣って `<details>` に入れる。
+5. ポータルの `OptInCard`（`system/portal/src/ui/components/OptInCard.tsx`）を再利用してUIを足す。カタログを渡せばトグルとオプションは描画されるので、書くのは分類ごとの枠だけです。既定で無効な分類なら、オプション機能に倣って `<details>` に入れる。
 
 分類が増えるたびに新しいコード経路を作るのではなく、カタログ1ファイル＋配線テーブル1つで済む形を保ってください。
 

@@ -208,6 +208,13 @@ export async function bundle(entryPoint, options = {}) {
     conditions: ["workerd"],
     target: "es2022",
     legalComments: "none",
+    // The UI is Japanese. Left on esbuild's default the whole of it ships as \uXXXX escapes,
+    // which doubles those literals and gives the isolate more source to parse at startup.
+    charset: "utf8",
+    // platform:"browser" makes esbuild refuse to resolve node builtins outright, which would
+    // fail the build before the runtime's nodejs_compat could handle them. Uploads declare
+    // that flag, so leave such imports for workerd rather than for esbuild.
+    external: ["node:*", ...(options.external ?? [])],
     ...options,
   });
   if (!output.outputFiles[0]) throw new Error(`esbuild produced no output for ${entryPoint}`);

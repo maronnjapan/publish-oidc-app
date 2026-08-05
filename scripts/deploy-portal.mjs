@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
-import path from "node:path";
-import { ROOT, bundle, readInfra, requireEnv, setSubdomain, setWorkerSecret, uploadWorker, workerUrl } from "./lib.mjs";
+import { readInfra, requireEnv, setSubdomain, setWorkerSecret, uploadWorker, workerUrl } from "./lib.mjs";
+import { bundlePortal } from "./portal-build.mjs";
 
 const token = requireEnv("CLOUDFLARE_API_TOKEN");
 const dispatchToken = requireEnv("GITHUB_DISPATCH_TOKEN");
 const infra = await readInfra();
 const scriptName = "maronn-oidc-portal";
-const code = await bundle(path.join(ROOT, "system", "portal", "src", "index.ts"));
+const code = await bundlePortal();
 await uploadWorker(infra, token, scriptName, code, [
   { type: "d1", name: "DB", id: infra.d1_database_id },
   { type: "plain_text", name: "RATE_LIMIT_PER_IP_PER_DAY", text: process.env.RATE_LIMIT_PER_IP_PER_DAY || "10" },

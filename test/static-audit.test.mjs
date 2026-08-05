@@ -21,12 +21,32 @@ test("deployment binds the same D1 and uses op_id as script/subdomain name", asy
   assert.match(source, /expires_at/);
 });
 
-test("portal preserves reference IP/global limits and Origin verification", async () => {
-  const portal = await readFile("system/portal/src/index.ts", "utf8");
-  assert.match(portal, /RATE_LIMIT_PER_IP_PER_DAY/);
-  assert.match(portal, /RATE_LIMIT_GLOBAL_PER_DAY/);
-  assert.match(portal, /CF-Connecting-IP/);
-  assert.match(portal, /origin !== `https:\/\/\$\{host\}`/);
+test("the portal Worker is deployed with the bindings its handlers read", async () => {
+  // The handlers' behaviour is covered in test/portal.test.mjs; what only a static check can
+  // see is whether the deployment actually installs what they read from `env`.
+  const deploy = await readFile("scripts/deploy-portal.mjs", "utf8");
+  for (const binding of ["RATE_LIMIT_PER_IP_PER_DAY", "RATE_LIMIT_GLOBAL_PER_DAY", "GITHUB_OWNER", "GITHUB_REPO"]) {
+    assert.match(deploy, new RegExp(`name: "${binding}"`));
+  }
+  assert.match(deploy, /type: "d1", name: "DB"/);
+  // The dispatch token is the one credential the Worker holds, so it must be a secret rather
+  // than a plain-text binding anyone with dashboard access can read back.
+  assert.match(deploy, /setWorkerSecret\(infra, token, scriptName, "GITHUB_DISPATCH_TOKEN"/);
+  assert.doesNotMatch(deploy, /plain_text", name: "GITHUB_DISPATCH_TOKEN/);
+});
+
+test("the shared D1 schema has one definition, used by setup and by the Workers", async () => {
+  const setup = await readFile("scripts/setup.mjs", "utf8");
+  assert.match(setup, /from "\.\.\/system\/db\/ddl\.mjs"/);
+  assert.doesNotMatch(setup, /CREATE TABLE/, "the DDL must not be duplicated into the setup script");
+  // That the DDL and the Drizzle tables describe the same database is test/db-schema.test.mjs.
+});
+
+test("a system change redeploys the portal, including the catalogs it renders from", async () => {
+  const workflow = await readFile(".github/workflows/deploy-system.yml", "utf8");
+  for (const path of ["system/**", "portal-choices.json", "experimental-features.json", "optional-features.json", "scripts/portal-build.mjs"]) {
+    assert.ok(workflow.includes(`- "${path}"`), `${path} is not a deploy trigger, so an edit to it would not reach production`);
+  }
 });
 
 test("GitHub workflow generates and deploys each OP independently", async () => {
