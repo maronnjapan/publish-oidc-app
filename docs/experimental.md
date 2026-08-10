@@ -12,6 +12,8 @@
 |---|---|---|---|
 | `par` | Pushed Authorization Requests | RFC 9126 | `POST /par` |
 | `token-exchange` | Token Exchange | RFC 8693 | `/token` の `grant_type=urn:ietf:params:oauth:grant-type:token-exchange` |
+| `jarm` | JWT Secured Authorization Response Mode | JARM | `response_mode=query.jwt` / `jwt` を指定したリクエストへの署名付きJWT応答 |
+| `device-authorization-grant` | Device Authorization Grant | RFC 8628 | `POST /device_authorization`、`/device`（GET/POST）、`POST /device/login`、`POST /device/approve` |
 
 CLI（`@maronn-openid-connect/cli`）がこれらの機能を自前で生成します。このリポジトリは選択内容を `--enable <feature-id>` として渡すだけで、ルート実装やDiscoveryメタデータは書きません。
 
@@ -32,6 +34,26 @@ CLI（`@maronn-openid-connect/cli`）がこれらの機能を自前で生成し�
 - 生成コードの `tokenExchangeConfig.allowedTargets` は**空のまま**です。fail safe設計で、`audience` / `resource` を指定した交換はすべて `invalid_target` で拒否され、スコープを絞る交換だけが通ります。下流サービス向けのトークンを試したい場合は、生成されたOPの `routes/token.ts` を手で編集してください（ポータルからは指定できません）。
 - この機能を選ぶと、クライアントの登録 `grantTypes` にも token-exchange のgrantが追加されます（`scripts/deploy-op.mjs` の `clientGrantTypes`）。追加し忘れると全ての交換が `unauthorized_client` になります。
 
+### `jarm`
+
+- `response_mode=query.jwt`（またはそのショートハンド `jwt`）を指定したリクエストに限り、`/authorize` と `/consent` の認可レスポンス（成功時の `code` / `state`、エラー時の `error` / `error_description` / `state`）を平文のクエリパラメータではなく、署名付きJWT1個を運ぶ `response` パラメータとして返します。指定しないリクエストは今まで通りの平文クエリのままです。
+- レスポンスJWTは常にRS256で署名され、`/.well-known/jwks.json` の同じ `kid` で検証できます。有効期間はCLIが生成する `routes/jarm.ts` の `jarmConfig.jarmResponseLifetimeSeconds`（既定60秒）です。ポータルから調整できる設定項目はありません。
+- Discoveryに `response_modes_supported: ['query', 'query.jwt', 'jwt']` と `authorization_signing_alg_values_supported: ['RS256']` が追加されます。
+- `fragment.jwt` / `form_post.jwt` はこのOPが実装する `response_type=code` の認可コードフローでは使わないため未実装で、指定すると `invalid_request` になります（平文のクエリエラーとして返ります。JARM自体を解釈できていないリクエストなので、JWTでは返せません）。
+- 新しい永続化は不要です。JARMで返すかどうかの選択（`jarmResponseMode`）は既存の認可トランザクションレコードに乗るため、共有D1のトランザクションストアがそのまま運びます。
+- このリポジトリが当てるスコープ強制パッチ（下表）は、jarm有効時は `buildErrorRedirect` がJARM対応の非同期関数に変わることを踏まえて分岐します（`scripts/generate-op.mjs` の `patchGeneratedSource`）。CLIが `buildErrorRedirect` のシグネチャや呼び出し位置を変えた場合はこの分岐ごと見直してください。
+
+### `device-authorization-grant`
+
+- ブラウザ操作が難しい機器（CLI・IoT・TVアプリ等）向けの認可方式です。機器が `POST /device_authorization`（クライアント認証必須）で `device_code` と短い `user_code` を受け取り、利用者は別の画面（PCやスマホ）で `/device` を開いて `user_code` を入力し、ログイン・承認します。機器は `/token` を `grant_type=urn:ietf:params:oauth:grant-type:device_code` でポーリングして結果を受け取ります。
+- Discoveryに `device_authorization_endpoint` が追加され、`grant_types_supported` に `urn:ietf:params:oauth:grant-type:device_code` が加わります。
+- `/device_authorization` は `/authorize` を経由しないため、公開スコープの強制はこの機能専用のパッチで行います（下表）。作成画面で選ばなかったスコープを要求すると、`device_code` を発行する前に `invalid_scope` で拒否します。
+- この機能を選ぶと、クライアントの登録 `grantTypes` に `urn:ietf:params:oauth:grant-type:device_code` が追加されます（`scripts/deploy-op.mjs` の `clientGrantTypes`）。追加し忘れると全てのポーリングが `unauthorized_client` になります。
+- 検証用の user_code はCLIが生成する `deviceAuthorizationConfig`（`routes/device-authorization.ts`）で有効期限10分・ポーリング間隔5秒・ログイン試行5回までに固定されており、ポータルから調整できる設定項目はありません。
+- `/device` の各POST（`/device`・`/device/login`・`/device/approve`）はCookieバインディングで保護されます（詳しくは生成される `store.ts` のコメントを参照）。これはCLIが常時有効にする防御で、オプション機能の `transaction-binding` とは別物です。
+- **永続化が必要です。** 生成コードの `InMemoryDeviceAuthorizationStore`（`store.ts`）は開発用のin-memory実装なので、`templates/cloudflare/persistence.ts` の `createD1DeviceAuthorizationStore` が共有D1版を実装します。レコードは `deviceCode` をキーに `oidc_records`（`kind = 'device-authorization:'`）へ、`userCode` からの逆引き用に `kind = 'device-authorization-user-code:'` の索引レコードを別途持ちます。`consume()` は `DELETE ... RETURNING` の1文で取り出すため、同じ `device_code` を同時に2回ポーリングしても片方しかトークンを得られません（RFC 8628 §3.5 の single use）。
+- `templates/cloudflare/index.ts` は `EXPERIMENTAL_WIRING['device-authorization-grant'].apply()` が `apply.ts` の `c.set('deviceAuthorizationStore', deviceAuthorizationStore)` をD1版優先に書き換えたうえで、entrypointのmiddlewareでD1版を常時 `context` に積みます（この機能を選ばなかったOPでは生成される経路が無いため無害です）。
+
 選択内容は生成時に `src/index.ts` の `EXPERIMENTAL_FEATURES` へ直接埋め込みます。Worker変数として渡すと、あとから消えたり書き換わったりしたときに「PAR必須」のような設定が黙って緩む（fail open）ためです。
 
 ## 生成コードへのパッチ
@@ -40,10 +62,11 @@ CLIの出力にこのリポジトリが当てる変更は次だけです。い�
 
 | 対象 | 内容 |
 |---|---|
-| `routes/authorize.ts` | 作成画面で選んだスコープ以外を `invalid_scope` で拒否 |
+| `routes/authorize.ts` | 作成画面で選んだスコープ以外を `invalid_scope` で拒否（jarm有効時は `buildErrorRedirect` のJARM対応シグネチャに合わせて分岐） |
 | `routes/discovery.ts` | `scopes_supported` を選択スコープに差し替え |
 | `routes/par.ts` | 同じスコープ検証をpush時にも適用 / 必須モードの反映 |
-| `apply.ts` | context に先に入れたD1版 `parStore` を優先させる |
+| `routes/device-authorization.ts` | 同じスコープ検証を `/device_authorization` にも適用 |
+| `apply.ts` | context に先に入れたD1版 `parStore` / `deviceAuthorizationStore` を優先させる |
 | `store.ts` | CLIが開発用に仕込む `testuser` フィクスチャを両方の経路で無効化 |
 
 永続化は `templates/cloudflare/persistence.ts` が担当します。CLIが定義する `JsonStoreBackend`（get / put / delete / list）を共有D1で実装し、`createJsonProviderStores()` に渡すだけで8つのストアが揃います。ユーザーストアだけは差し替えて、平文比較ではなくポータルが書いたsalt付きSHA-256を検証します。キーは `access-token:` のようなprefixを `kind` 列（索引あり）に、残りをSHA-256にして保存するため、トークンや認可コードが復元可能な形でD1に残りません。

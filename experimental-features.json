@@ -10,11 +10,22 @@
       "spec": "RFC 9126",
       "summary": "認可リクエストをバックチャネルで事前POSTし、返却された request_uri を /authorize に渡します。パラメータがブラウザのURLに載らず、改ざんもできません。",
       "links": [
-        { "label": "RFC 9126", "url": "https://datatracker.ietf.org/doc/html/rfc9126" },
-        { "label": "このリポジトリでの実装メモ", "doc": "docs/experimental.md" }
+        {
+          "label": "RFC 9126",
+          "url": "https://datatracker.ietf.org/doc/html/rfc9126"
+        },
+        {
+          "label": "このリポジトリでの実装メモ",
+          "doc": "docs/experimental.md"
+        }
       ],
-      "endpoints": ["POST /par"],
-      "discovery": ["pushed_authorization_request_endpoint", "require_pushed_authorization_requests"],
+      "endpoints": [
+        "POST /par"
+      ],
+      "discovery": [
+        "pushed_authorization_request_endpoint",
+        "require_pushed_authorization_requests"
+      ],
       "options": [
         {
           "id": "required",
@@ -32,11 +43,74 @@
       "spec": "RFC 8693",
       "summary": "発行済みアクセストークンを subject_token として /token へ渡し、スコープを絞ったトークンへ交換します。専用エンドポイントは増えず、grant_type=urn:ietf:params:oauth:grant-type:token-exchange として動作します。",
       "links": [
-        { "label": "RFC 8693", "url": "https://datatracker.ietf.org/doc/html/rfc8693" },
-        { "label": "このリポジトリでの実装メモ", "doc": "docs/experimental.md" }
+        {
+          "label": "RFC 8693",
+          "url": "https://datatracker.ietf.org/doc/html/rfc8693"
+        },
+        {
+          "label": "このリポジトリでの実装メモ",
+          "doc": "docs/experimental.md"
+        }
       ],
-      "endpoints": ["POST /token (grant_type=urn:ietf:params:oauth:grant-type:token-exchange)"],
-      "discovery": ["grant_types_supported"],
+      "endpoints": [
+        "POST /token (grant_type=urn:ietf:params:oauth:grant-type:token-exchange)"
+      ],
+      "discovery": [
+        "grant_types_supported"
+      ],
+      "options": []
+    },
+    {
+      "id": "jarm",
+      "status": "supported",
+      "subpath": "@maronn-openid-connect/experimental/jarm",
+      "label": "JARM（JWT Secured Authorization Response Mode）",
+      "spec": "JARM",
+      "summary": "response_mode=query.jwt（または jwt）を指定したリクエストに限り、認可レスポンス（code / state / エラー）を平文のクエリパラメータではなく署名付きJWT1個にまとめて返します。",
+      "links": [
+        {
+          "label": "JARM (OpenID Foundation FAPI WG)",
+          "url": "https://openid.net/specs/oauth-v2-jarm-final.html"
+        },
+        {
+          "label": "このリポジトリでの実装メモ",
+          "doc": "docs/experimental.md"
+        }
+      ],
+      "endpoints": [],
+      "discovery": [
+        "response_modes_supported",
+        "authorization_signing_alg_values_supported"
+      ],
+      "options": []
+    },
+    {
+      "id": "device-authorization-grant",
+      "status": "supported",
+      "subpath": "@maronn-openid-connect/experimental/device-authorization-grant",
+      "label": "Device Authorization Grant",
+      "spec": "RFC 8628",
+      "summary": "ブラウザ操作が難しい機器（CLI・IoT・TVアプリ等）向けに、別デバイスでuser_codeを入力してもらう認可方式を追加します。/device_authorization がdevice_code/user_codeを発行し、/device が確認画面を提供します。",
+      "links": [
+        {
+          "label": "RFC 8628",
+          "url": "https://datatracker.ietf.org/doc/html/rfc8628"
+        },
+        {
+          "label": "このリポジトリでの実装メモ",
+          "doc": "docs/experimental.md"
+        }
+      ],
+      "endpoints": [
+        "POST /device_authorization",
+        "GET,POST /device",
+        "POST /device/login",
+        "POST /device/approve"
+      ],
+      "discovery": [
+        "device_authorization_endpoint",
+        "grant_types_supported"
+      ],
       "options": []
     }
   ]

@@ -36,6 +36,7 @@ function parseRequestConfig(row, opId) {
 }
 
 export const TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange";
+export const DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 
 /**
  * The generated OP authorizes a grant against the client's registered grantTypes, so an
@@ -46,6 +47,7 @@ export function clientGrantTypes(features, experimental = {}) {
   const grantTypes = ["authorization_code"];
   if (features["refresh-token"]) grantTypes.push("refresh_token");
   if (experimental["token-exchange"]) grantTypes.push(TOKEN_EXCHANGE_GRANT_TYPE);
+  if (experimental["device-authorization-grant"]) grantTypes.push(DEVICE_CODE_GRANT_TYPE);
   return grantTypes;
 }
 

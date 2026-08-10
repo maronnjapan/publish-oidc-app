@@ -232,10 +232,10 @@ step6() {
 並びます。文言とリンクは portal-choices.json / optional-features.json /
 experimental-features.json で設定します（docs/choices.md）。
 
-必要なら「試験的な機能」（@maronn-openid-connect/experimental、PAR / RFC 9126 と
-Token Exchange / RFC 8693）も選べます。APIが安定しておらず他の機能より適切に
-動かない可能性が高いため、動作検証にのみ使ってください。詳細は
-docs/experimental.md を参照してください。
+必要なら「試験的な機能」（@maronn-openid-connect/experimental、PAR / RFC 9126、
+Token Exchange / RFC 8693、JARM、Device Authorization Grant / RFC 8628）も
+選べます。APIが安定しておらず他の機能より適切に動かない可能性が高いため、
+動作検証にのみ使ってください。詳細は docs/experimental.md を参照してください。
 
 折りたたまれている「オプション機能」は、CLIが既定で無効にしている安定機能です
 （認可トランザクションのブラウザ束縛）。仕様が要求していない堅牢化なので既定では
