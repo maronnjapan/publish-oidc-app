@@ -46,6 +46,19 @@ async function buildWorker(opId, experimental) {
 const required = await buildWorker("maronn-op-parreq12345", { par: { required: true } });
 const optional = await buildWorker("maronn-op-paropt12345", { par: {} });
 const exchange = await buildWorker("maronn-op-exch12345678", { "token-exchange": {} });
+const jarm = await buildWorker("maronn-op-jarm12345678", { jarm: {} });
+const device = await buildWorker("maronn-op-device1234567", { "device-authorization-grant": {} });
+
+/** Decodes a JARM response JWT's payload without verifying the signature (RS256 signing is CLI-owned and covered by its own conformance suite; this repository's wiring is what these tests exercise). */
+function decodeJarmPayload(jwt) {
+  const [, payload] = jwt.split(".");
+  return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+}
+
+/** The "name=value" pair of a Set-Cookie response header, dropping its attributes. */
+function cookiePair(response) {
+  return (response.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+}
 
 async function pushAuthorizationRequest(fetchWorker, issuer, overrides = {}) {
   const verifier = "a".repeat(64);
@@ -79,7 +92,7 @@ async function completeLogin(fetchWorker, issuer, location) {
 test("the catalog only advertises features the CLI and the generator both know", async () => {
   const catalog = await readExperimentalCatalog();
   const supported = supportedFeatures(catalog);
-  assert.deepEqual(supported.map((feature) => feature.id).sort(), ["par", "token-exchange"]);
+  assert.deepEqual(supported.map((feature) => feature.id).sort(), ["device-authorization-grant", "jarm", "par", "token-exchange"]);
   const cliHelp = await readFile("node_modules/@maronn-openid-connect/cli/dist/features.js", "utf8");
   for (const feature of supported) {
     assert.match(feature.subpath, /^@maronn-openid-connect\/experimental\//);
@@ -285,4 +298,144 @@ test("token exchange rejects an unknown subject token", async () => {
     }),
   }));
   assert.equal(response.status, 400);
+});
+
+test("jarm: discovery advertises the JWT response modes only when jarm is enabled", async () => {
+  const { fetch: fetchWorker } = await jarm.client();
+  const metadata = await (await fetchWorker(new Request(`${jarm.issuer}/.well-known/openid-configuration`))).json();
+  assert.deepEqual(metadata.response_modes_supported, ["query", "query.jwt", "jwt"]);
+  assert.deepEqual(metadata.authorization_signing_alg_values_supported, ["RS256"]);
+
+  const { fetch: plainFetch } = await exchange.client();
+  const plainMetadata = await (await plainFetch(new Request(`${exchange.issuer}/.well-known/openid-configuration`))).json();
+  assert.deepEqual(plainMetadata.response_modes_supported, ["query"]);
+  assert.equal("authorization_signing_alg_values_supported" in plainMetadata, false);
+});
+
+test("jarm: an authorization request outside the selected scopes gets its invalid_scope error as a signed JWT", async () => {
+  const { fetch: fetchWorker } = await jarm.client();
+  const authorizeUrl = new URL(`${jarm.issuer}/authorize`);
+  for (const [name, value] of Object.entries({ response_type: "code", client_id: config.client_id, redirect_uri: config.redirect_url, scope: "openid address", state: "jarm-scope-error", response_mode: "query.jwt", code_challenge: "x".repeat(43), code_challenge_method: "S256" })) authorizeUrl.searchParams.set(name, value);
+  const response = await fetchWorker(new Request(authorizeUrl));
+  assert.equal(response.status, 302);
+  const location = new URL(response.headers.get("location"));
+  // JARM Section 2.1: no plain error / error_description / state parameter is added
+  // alongside the signed response.
+  assert.deepEqual([...location.searchParams.keys()], ["response"]);
+  const payload = decodeJarmPayload(location.searchParams.get("response"));
+  assert.equal(payload.error, "invalid_scope");
+  assert.equal(payload.state, "jarm-scope-error");
+});
+
+test("jarm: response_mode=jwt drives the full flow to a token via the signed response", async () => {
+  const { fetch: fetchWorker } = await jarm.client();
+  const verifier = "a".repeat(64);
+  const challenge = base64Url(new Uint8Array(await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
+  const authorizeUrl = new URL(`${jarm.issuer}/authorize`);
+  for (const [name, value] of Object.entries({ response_type: "code", client_id: config.client_id, redirect_uri: config.redirect_url, scope: "openid profile email", state: "jarm-state", nonce: "jarm-nonce", response_mode: "jwt", code_challenge: challenge, code_challenge_method: "S256" })) authorizeUrl.searchParams.set(name, value);
+  const authorize = await fetchWorker(new Request(authorizeUrl));
+  assert.equal(authorize.status, 302, await authorize.clone().text());
+
+  // The redirect to /login is unaffected by JARM; only the final authorization response is
+  // signed, so the shared completeLogin() helper drives it exactly like the other tests.
+  const callback = await completeLogin(fetchWorker, jarm.issuer, authorize.headers.get("location"));
+  assert.deepEqual([...callback.searchParams.keys()], ["response"]);
+  const payload = decodeJarmPayload(callback.searchParams.get("response"));
+  assert.equal(payload.iss, jarm.issuer);
+  assert.equal(payload.aud, config.client_id);
+  assert.equal(payload.state, "jarm-state");
+  assert.ok(payload.code);
+
+  const tokenResponse = await fetchWorker(new Request(`${jarm.issuer}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", code: payload.code, redirect_uri: config.redirect_url, client_id: config.client_id, client_secret: config.client_secret, code_verifier: verifier }) }));
+  assert.equal(tokenResponse.status, 200, await tokenResponse.clone().text());
+  assert.ok((await tokenResponse.json()).access_token);
+});
+
+async function requestDeviceAuthorization(fetchWorker, issuer, overrides = {}) {
+  const body = new URLSearchParams({
+    client_id: config.client_id,
+    client_secret: config.client_secret,
+    scope: "openid profile email",
+    ...overrides,
+  });
+  return fetchWorker(new Request(`${issuer}/device_authorization`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body }));
+}
+
+/** Drives the /device verification UI (code entry -> login -> approve) to completion. */
+async function completeDeviceApproval(fetchWorker, issuer, userCode) {
+  const entry = await fetchWorker(new Request(`${issuer}/device`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ user_code: userCode }) }));
+  assert.equal(entry.status, 200, await entry.clone().text());
+  const bindingCookie = cookiePair(entry);
+  const loginCsrf = (await entry.clone().text()).match(/name="csrf_token" value="([^"]+)"/)?.[1];
+
+  const login = await fetchWorker(new Request(`${issuer}/device/login`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", cookie: bindingCookie },
+    body: new URLSearchParams({ user_code: userCode, csrf_token: loginCsrf, username: "alice", password: "password-123" }),
+  }));
+  assert.equal(login.status, 200, await login.clone().text());
+  const sessionCookie = cookiePair(login);
+  const approveCsrf = (await login.clone().text()).match(/name="csrf_token" value="([^"]+)"/)?.[1];
+
+  const approve = await fetchWorker(new Request(`${issuer}/device/approve`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", cookie: `${bindingCookie}; ${sessionCookie}` },
+    body: new URLSearchParams({ user_code: userCode, csrf_token: approveCsrf, decision: "approve" }),
+  }));
+  assert.equal(approve.status, 200, await approve.clone().text());
+}
+
+test("device: discovery advertises the device endpoint and grant only when enabled", async () => {
+  const { fetch: fetchWorker } = await device.client();
+  const metadata = await (await fetchWorker(new Request(`${device.issuer}/.well-known/openid-configuration`))).json();
+  assert.equal(metadata.device_authorization_endpoint, `${device.issuer}/device_authorization`);
+  assert.ok(metadata.grant_types_supported.includes("urn:ietf:params:oauth:grant-type:device_code"));
+
+  const { fetch: plainFetch } = await exchange.client();
+  const plainMetadata = await (await plainFetch(new Request(`${exchange.issuer}/.well-known/openid-configuration`))).json();
+  assert.equal("device_authorization_endpoint" in plainMetadata, false);
+  assert.ok(!plainMetadata.grant_types_supported.includes("urn:ietf:params:oauth:grant-type:device_code"));
+});
+
+test("device: /device_authorization enforces the selected scopes and persists to the shared D1", async () => {
+  const { DB, fetch: fetchWorker } = await device.client();
+  const unsupported = await requestDeviceAuthorization(fetchWorker, device.issuer, { scope: "openid address" });
+  assert.equal(unsupported.status, 400);
+  assert.equal((await unsupported.json()).error, "invalid_scope");
+
+  const response = await requestDeviceAuthorization(fetchWorker, device.issuer);
+  assert.equal(response.status, 200, await response.clone().text());
+  const body = await response.json();
+  assert.ok(body.device_code);
+  assert.ok(body.user_code);
+  assert.equal(body.verification_uri, `${device.issuer}/device`);
+  assert.ok(DB.kindsInUse().includes("device-authorization:"));
+  assert.ok(DB.kindsInUse().includes("device-authorization-user-code:"));
+  // The record_key is a SHA-256 digest, not the raw device_code/user_code (same guarantee
+  // the PAR store's own test above checks): only the value stored under it may name them.
+  assert.equal([...DB.records.keys()].some((key) => key.includes(body.device_code) || key.includes(body.user_code)), false);
+});
+
+test("device: polling before approval answers authorization_pending", async () => {
+  const { fetch: fetchWorker } = await device.client();
+  const { device_code } = await (await requestDeviceAuthorization(fetchWorker, device.issuer)).json();
+  const poll = await fetchWorker(new Request(`${device.issuer}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code, client_id: config.client_id, client_secret: config.client_secret }) }));
+  assert.equal(poll.status, 400);
+  assert.equal((await poll.json()).error, "authorization_pending");
+});
+
+test("device: approving the verification UI lets the polling client redeem tokens, once", async () => {
+  const { fetch: fetchWorker } = await device.client();
+  const { device_code, user_code } = await (await requestDeviceAuthorization(fetchWorker, device.issuer)).json();
+  await completeDeviceApproval(fetchWorker, device.issuer, user_code);
+
+  const poll = await fetchWorker(new Request(`${device.issuer}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code, client_id: config.client_id, client_secret: config.client_secret }) }));
+  assert.equal(poll.status, 200, await poll.clone().text());
+  const tokens = await poll.json();
+  assert.ok(tokens.access_token);
+  assert.ok(tokens.id_token);
+
+  // RFC 8628 §3.5: single use. A second poll for the same device_code must fail.
+  const replay = await fetchWorker(new Request(`${device.issuer}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code, client_id: config.client_id, client_secret: config.client_secret }) }));
+  assert.equal(replay.status, 400);
 });

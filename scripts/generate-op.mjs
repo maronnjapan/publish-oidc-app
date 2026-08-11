@@ -98,6 +98,36 @@ export const EXPERIMENTAL_WIRING = {
     // scope-narrowing and lifetime-shortening exchanges work, naming a target does not.
     apply() {},
   },
+  jarm: {
+    // JARM is generated whole by the CLI (routes/jarm.ts, and a JWT-aware authorize.ts /
+    // consent.ts). The one repository-owned adjustment it touches — keeping the scope
+    // enforcement patch below JARM-aware — applies to every OP regardless of which
+    // experimental features are selected, so patchGeneratedSource() handles it once
+    // instead of here.
+    apply() {},
+  },
+  "device-authorization-grant": {
+    apply(sources) {
+      // The generated device authorization store is in-memory. Let the D1-backed one that
+      // the Worker entrypoint seeds into context win (templates/cloudflare/index.ts), same
+      // as the PAR store above.
+      sources["apply.ts"] = replaceOnce(
+        sources["apply.ts"],
+        "    c.set('deviceAuthorizationStore', deviceAuthorizationStore);",
+        "    c.set('deviceAuthorizationStore', c.get('deviceAuthorizationStore') ?? deviceAuthorizationStore);",
+        "generated apply.ts",
+      );
+      // /device_authorization never goes through /authorize, so it has to enforce the
+      // publisher's scope selection on its own — a client that asks for an unavailable
+      // scope should learn about it at request time, same rationale as PAR above.
+      sources["routes/device-authorization.ts"] = replaceOnce(
+        sources["routes/device-authorization.ts"],
+        "    const requestedScope = validateDeviceAuthorizationScope(params['scope']);",
+        "    const requestedScope = validateDeviceAuthorizationScope(params['scope']);\n\n    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = requestedScope.filter((scope) => !allowedScopes.includes(scope));\n    if (unsupportedScopes.length > 0) {\n      throw new DeviceAuthorizationError('invalid_scope', 'Unsupported scope: ' + unsupportedScopes.join(' '));\n    }",
+        "generated routes/device-authorization.ts",
+      );
+    },
+  },
 };
 
 /**
@@ -128,12 +158,20 @@ function replaceOnce(source, marker, replacement, description) {
  * Each one asserts its marker so a CLI upgrade that moves the ground under us fails the
  * build instead of silently producing an OP that ignores the publisher's choices.
  */
-function patchGeneratedSource(sources) {
+function patchGeneratedSource(sources, { jarmEnabled }) {
   const marker = "    // Create authentication transaction";
+  // EXPERIMENTAL (JARM Section 2.1): with --enable jarm, the CLI turns buildErrorRedirect
+  // into an async function that takes a leading `jarm` context argument (undefined for the
+  // plain query response). The marker itself does not move, so a naive patch keeps
+  // compiling against the pre-JARM signature and silently drops the `await` — this branch
+  // is what test/experimental.test.mjs's jarm coverage guards against.
+  const errorRedirectCall = jarmEnabled
+    ? "await buildErrorRedirect(jarmResponse, validatedRequest.redirectUri, 'invalid_scope', validatedRequest.state, 'Unsupported scope: ' + unsupportedScopes.join(' '), issuer)"
+    : "buildErrorRedirect(validatedRequest.redirectUri, 'invalid_scope', validatedRequest.state, 'Unsupported scope: ' + unsupportedScopes.join(' '), issuer)";
   sources["routes/authorize.ts"] = replaceOnce(
     sources["routes/authorize.ts"],
     marker,
-    `    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = validatedRequest.scope.filter((scope) => !allowedScopes.includes(scope));\n    if (unsupportedScopes.length > 0) {\n      return c.redirect(buildErrorRedirect(validatedRequest.redirectUri, 'invalid_scope', validatedRequest.state, 'Unsupported scope: ' + unsupportedScopes.join(' '), issuer));\n    }\n\n${marker}`,
+    `    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = validatedRequest.scope.filter((scope) => !allowedScopes.includes(scope));\n    if (unsupportedScopes.length > 0) {\n      return c.redirect(${errorRedirectCall});\n    }\n\n${marker}`,
     "generated authorize.ts",
   );
 
@@ -212,11 +250,18 @@ export async function generateOp(opId, configPath) {
   if (enabledIds.length > 0) args.push("--enable", enabledIds.join(","));
   await execFile("npm", args, { cwd: ROOT, maxBuffer: 10 * 1024 * 1024 });
 
-  const patched = ["apply.ts", "store.ts", "routes/authorize.ts", "routes/discovery.ts", ...(experimentalIds.includes("par") ? ["routes/par.ts"] : [])];
+  const patched = [
+    "apply.ts",
+    "store.ts",
+    "routes/authorize.ts",
+    "routes/discovery.ts",
+    ...(experimentalIds.includes("par") ? ["routes/par.ts"] : []),
+    ...(experimentalIds.includes("device-authorization-grant") ? ["routes/device-authorization.ts"] : []),
+  ];
   const sources = Object.fromEntries(await Promise.all(
     patched.map(async (file) => [file, await readFile(path.join(providerDirectory, file), "utf8")]),
   ));
-  patchGeneratedSource(sources);
+  patchGeneratedSource(sources, { jarmEnabled: experimentalIds.includes("jarm") });
   for (const [ids, selection, wiringTable, kind, guide] of [
     [optionalIds, optional, OPTIONAL_WIRING, "optional", "docs/optional-features.md"],
     [experimentalIds, experimental, EXPERIMENTAL_WIRING, "experimental", "docs/experimental.md"],

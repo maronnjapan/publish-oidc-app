@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { ClientInfo, SigningKey, SigningKeyProvider, TokenClientInfo } from '@maronn-openid-connect/core';
 import { applyOidc } from './oidc-provider/apply.js';
-import { createD1ParStore, createD1ProviderStores } from './oidc-provider/persistence.js';
+import { createD1DeviceAuthorizationStore, createD1ParStore, createD1ProviderStores } from './oidc-provider/persistence.js';
 
 interface Env {
   DB: D1Database;
@@ -55,9 +55,12 @@ function createWorkerApp(env: Env): Hono<{ Bindings: Env; Variables: Record<stri
 
   app.use('*', async (c, next) => {
     c.set('allowedScopes', scopes);
-    // applyOidc only falls back to the generated in-memory PAR store when nothing is
-    // already in context, so seed the D1-backed one here (see scripts/generate-op.mjs).
+    // applyOidc only falls back to the generated in-memory PAR / device authorization
+    // stores when nothing is already in context, so seed the D1-backed ones here (see
+    // scripts/generate-op.mjs). Harmless to set when the corresponding experimental
+    // feature was not selected: the generated routes that would read it do not exist.
     c.set('parStore', createD1ParStore(env.DB, env.OP_ID));
+    c.set('deviceAuthorizationStore', createD1DeviceAuthorizationStore(env.DB, env.OP_ID));
     c.header('X-Content-Type-Options', 'nosniff');
     c.header('Referrer-Policy', 'no-referrer');
     c.header('X-Frame-Options', 'DENY');

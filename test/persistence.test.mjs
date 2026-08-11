@@ -29,7 +29,7 @@ await build({
   entryPoints: [path.join(generated.appDirectory, "src/oidc-provider/persistence.ts")],
   bundle: true, platform: "node", format: "esm", outfile: output,
 });
-const { createD1ParStore, createD1ProviderStores, createD1StoreBackend, createD1UserStore } =
+const { createD1DeviceAuthorizationStore, createD1ParStore, createD1ProviderStores, createD1StoreBackend, createD1UserStore } =
   await import(`${pathToFileURL(output).href}?${Date.now()}`);
 
 test("the backend namespaces every key by op_id and never stores the raw key", async () => {
@@ -120,4 +120,42 @@ test("a pushed request_uri is removed and returned in one statement", async () =
   const statements = DB.statements.filter((entry) => entry.sql.includes("par-request:") || entry.params.includes("par-request:"));
   assert.ok(statements.some((entry) => entry.sql.startsWith("DELETE FROM oidc_records") && entry.sql.includes("RETURNING")));
   assert.equal(statements.filter((entry) => entry.sql.startsWith("SELECT")).length, 0, "consume must not read before deleting");
+});
+
+test("a device authorization record round-trips through both its device_code and user_code keys", async () => {
+  const DB = new MemoryD1();
+  const store = createD1DeviceAuthorizationStore(DB, "maronn-op-devicestore0");
+  const record = {
+    deviceCode: "device-code-abc",
+    userCode: "USERCODE",
+    userCodeDisplay: "USER-CODE",
+    clientId: "client_store12345678",
+    scope: ["openid"],
+    status: "pending",
+    createdAt: new Date(),
+    expiresAt: new Date(Date.now() + 60_000),
+    interval: 5,
+    lastPolledAt: null,
+    csrfToken: null,
+    bindingHash: null,
+    loginAttempts: 0,
+  };
+  await store.save(record);
+  assert.equal([...DB.records.keys()].some((key) => key.includes("device-code-abc") || key.includes("USERCODE")), false, "neither key must be stored in the clear");
+
+  const byDeviceCode = await store.findByDeviceCode(record.deviceCode);
+  assert.equal(byDeviceCode.clientId, record.clientId);
+  assert.ok(byDeviceCode.expiresAt instanceof Date);
+
+  const byUserCode = await store.findByUserCode(record.userCode);
+  assert.equal(byUserCode.deviceCode, record.deviceCode);
+
+  const approved = { ...record, status: "approved", subject: "alice", grantId: "grant-1" };
+  await store.update(approved);
+  assert.equal((await store.findByDeviceCode(record.deviceCode)).status, "approved");
+
+  const consumed = await store.consume(record.deviceCode);
+  assert.equal(consumed.subject, "alice");
+  assert.equal(await store.consume(record.deviceCode), null, "a device_code is single use");
+  assert.equal(await store.findByUserCode(record.userCode), null, "the user_code index must not outlive the record it points to");
 });
