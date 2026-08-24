@@ -11,6 +11,7 @@ on:
       - "portal-choices.json"
       - "experimental-features.json"
       - "optional-features.json"
+      - "community.json"
       - "infra.json"
       - "scripts/portal-build.mjs"
       - "scripts/deploy-portal.mjs"

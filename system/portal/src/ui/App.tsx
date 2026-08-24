@@ -7,6 +7,7 @@ import { type Clock, createOp, loadQuota } from "./submit";
 import { formErrors } from "./validation";
 import { AppSettingsCard } from "./components/AppSettingsCard";
 import { ChoiceCard } from "./components/ChoiceCard";
+import { CommunityFooter } from "./components/CommunityFooter";
 import { Hint } from "./components/Hints";
 import { OptInCard } from "./components/OptInCard";
 import { SubmitCard } from "./components/SubmitCard";
@@ -116,6 +117,7 @@ export function App({ api = browserApi, clock }: { api?: PortalApi; clock?: Cloc
           <SubmitCard state={state} />
         </fieldset>
       </form>
+      <CommunityFooter />
     </main>
   );
 }

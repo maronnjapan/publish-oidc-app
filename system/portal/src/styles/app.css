@@ -339,6 +339,24 @@ code {
   clip: rect(0, 0, 0, 0);
 }
 
+/*
+ * The footer sits below the form's cards and is not part of it: it stays readable and its
+ * links stay clickable while the form is disabled or busy.
+ */
+.community {
+  margin-top: 2rem;
+}
+
+.community p {
+  margin: 0.6rem 0 0;
+  color: #52627a;
+  font-size: 0.95rem;
+}
+
+.community a {
+  color: #165dcc;
+}
+
 @media (max-width: 42rem) {
   .grid,
   .user {
