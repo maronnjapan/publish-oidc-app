@@ -251,6 +251,20 @@ EOF
   confirm "画面からOPを作成し、発行情報とDiscoveryを確認できましたか？" || return 1
   mark_done step6
   ok "セットアップは完了です。"
+  info "詰まったとき・要望があるときの相談先です。"
+  show_community
+}
+
+# 相談チャンネルとブログの案内。URLは画面のフッターと同じ community.json から読むので、
+# ここに書き写した値が古くなることはない。
+show_community() {
+  node -e '
+    const { readFileSync } = require("node:fs");
+    const community = JSON.parse(readFileSync("community.json", "utf8"));
+    console.log(`  ${community.consult.link.label}: ${community.consult.link.url}`);
+    console.log(`  ${community.blog.link.label}: ${community.blog.link.url}`);
+    console.log("  ブログに書いてほしいトピックも、同じ相談チャンネルで募集中です。");
+  ' 2>/dev/null || warn "community.json を読めませんでした。"
 }
 
 show_status() {
@@ -265,6 +279,8 @@ show_status() {
     if is_done "$state_key"; then printf "  ${C_GREEN}[完了]${C_RESET} Step %s: %s\n" "$number" "$label"; else printf "  ${C_DIM}[未完]${C_RESET} Step %s: %s\n" "$number" "$label"; fi
   done
   printf '\n  Cloudflare Account: %s\n  GitHub repository:  %s\n' "$(load_config CLOUDFLARE_ACCOUNT_ID)" "$(load_config GITHUB_REPOSITORY)"
+  printf '\n  相談先:\n'
+  show_community
 }
 
 run_all() {

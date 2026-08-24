@@ -2,6 +2,17 @@
 
 Web UIから設定ごとに独立したOpenID ProviderをCloudflare Workersへ発行する基盤です。生成コードは固定バージョンの`@maronn-openid-connect/cli`でHonoテンプレートを作り、OIDC処理には`@maronn-openid-connect/core`を使用します。
 
+## 相談とトピックの募集
+
+使い方、発行したOPの挙動、仕様の解釈で迷ったときは、Slackの相談チャンネルへどうぞ。この基盤への要望や不具合の報告もこちらで受け付けています。
+
+- 相談チャンネル（Slack）: <https://auth-axn8351.slack.com/archives/C0BS79ERD9C>
+- ブログ: <https://web.maronn-room.com/>
+
+OpenID ConnectやOAuthまわりで調べたことはブログに書いています。「これについて書いてほしい」というトピックも、同じ相談チャンネルで募集中です。
+
+同じ案内をポータル画面の最後と`./guide.sh`（セットアップ完了時と`status`）にも出しています。文言もURLも`community.json`が単一の情報源で、UIコードもガイドも触りません。forkした場合はこのファイルを自分の相談先とブログに書き換えてください。
+
 ## 主な機能
 
 - Worker 1個につきOP 1個を発行し、Workerのサブドメインラベル（例: `maronn-op-abc...`）をOP IDと共有D1の名前空間キーに使用

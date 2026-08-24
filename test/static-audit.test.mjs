@@ -44,7 +44,7 @@ test("the shared D1 schema has one definition, used by setup and by the Workers"
 
 test("a system change redeploys the portal, including the catalogs it renders from", async () => {
   const workflow = await readFile(".github/workflows/deploy-system.yml", "utf8");
-  for (const path of ["system/**", "portal-choices.json", "experimental-features.json", "optional-features.json", "scripts/portal-build.mjs"]) {
+  for (const path of ["system/**", "portal-choices.json", "experimental-features.json", "optional-features.json", "community.json", "scripts/portal-build.mjs"]) {
     assert.ok(workflow.includes(`- "${path}"`), `${path} is not a deploy trigger, so an edit to it would not reach production`);
   }
 });
@@ -125,4 +125,16 @@ test("guide covers secrets, shared D1, deployment, and smoke testing", async () 
   assert.match(guide, /npm run deploy:reaper/);
   assert.match(guide, /共有D1/);
   assert.match(guide, /Discovery/);
+});
+
+test("guide hands over the same consultation channel the portal shows, without copying it", async () => {
+  const guide = await readFile("guide.sh", "utf8");
+  const community = JSON.parse(await readFile("community.json", "utf8"));
+  // Setup ends and `status` reports, which are the two moments someone is left wondering
+  // where to ask — so both of them print it.
+  assert.match(guide, /show_community/);
+  assert.match(guide, /community\.json/);
+  for (const url of [community.consult.link.url, community.blog.link.url]) {
+    assert.ok(!guide.includes(url), `${url} is copied into guide.sh instead of read from community.json`);
+  }
 });

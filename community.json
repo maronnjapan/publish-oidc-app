@@ -1,0 +1,19 @@
+{
+  "note": "ポータル画面の最後に出る「相談とトピックの募集」の単一の情報源。相談先のSlackチャンネルと、作者のブログへの動線を持ちます。文言もURLもここだけで決まり、UIコードは触りません。blog.requestLinkLabel は「ブログに書いてほしいトピックの相談」へのリンクにだけ使うラベルで、リンク先は consult.link.url と同じチャンネルです（URLを2か所に書かないため）。fork した場合はこのファイルを自分の相談先とブログに書き換えてください。",
+  "heading": "相談とトピックの募集",
+  "consult": {
+    "summary": "使い方、発行したOPの挙動、仕様の解釈で迷ったときは、Slackの相談チャンネルへどうぞ。この基盤への要望や不具合の報告もこちらで受け付けています。",
+    "link": {
+      "label": "Slackの相談チャンネル",
+      "url": "https://auth-axn8351.slack.com/archives/C0BS79ERD9C"
+    }
+  },
+  "blog": {
+    "summary": "OpenID ConnectやOAuthまわりで調べたことは、作者のブログに書いています。「これについて書いてほしい」というトピックも、同じ相談チャンネルで募集中です。",
+    "link": {
+      "label": "ブログ web.maronn-room.com",
+      "url": "https://web.maronn-room.com/"
+    },
+    "requestLinkLabel": "Slackでトピックをリクエスト"
+  }
+}

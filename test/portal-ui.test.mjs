@@ -12,8 +12,9 @@ import { importModules, portalHtml } from "./support/build.mjs";
  */
 
 const html = await portalHtml();
-const { catalog, document: renderer } = await importModules({
+const { catalog, community, document: renderer } = await importModules({
   catalog: "system/portal/src/shared/catalog.ts",
+  community: "system/portal/src/shared/community.ts",
   document: "system/portal/src/server/document.tsx",
 });
 
@@ -147,4 +148,34 @@ test("the page starts with one empty account row and a quota placeholder", () =>
   assert.equal([...html.matchAll(/class="username"/g)].length, 1);
   assert.match(html, /0 \/ 5件|1 \/ 5件/);
   assert.match(html, /本日の残り作成回数を確認しています…/);
+});
+
+test("community.json carries prose and a link for both entries", () => {
+  // It is edited as data — by a fork pointing at its own channel, most of all — and every
+  // field of it is rendered, so a missing one would reach the page as an empty paragraph.
+  const { heading, consult, blog } = community.COMMUNITY;
+  const strings = [heading, consult.summary, blog.summary, blog.requestLinkLabel];
+  for (const entry of [consult.link, blog.link]) strings.push(entry.label, entry.url);
+  for (const value of strings) assert.ok(typeof value === "string" && value.length > 0);
+  for (const entry of [consult.link, blog.link]) assert.match(entry.url, /^https:\/\//);
+});
+
+test("the page ends with where to ask and what to read, straight from community.json", () => {
+  const { heading, consult, blog } = community.COMMUNITY;
+  const footer = html.slice(html.indexOf('<footer class="card community">'));
+  assert.ok(footer.startsWith('<footer class="card community">'), "the community footer is missing from the page");
+  for (const text of [heading, consult.summary, consult.link.label, blog.summary, blog.link.label]) {
+    assert.ok(footer.includes(text), `${JSON.stringify(text)} is missing from the community footer`);
+  }
+  // Asking for a topic happens in the channel, so the blog paragraph links back to it — and
+  // the channel's URL is written once, in `consult`.
+  assert.ok(footer.includes(`<a href="${consult.link.url}" target="_blank" rel="noopener noreferrer">${blog.requestLinkLabel}</a>`));
+  assert.ok(footer.includes(`<a href="${blog.link.url}"`));
+});
+
+test("the footer is outside the form, so it stays usable while the form is disabled", () => {
+  // The whole form is rendered inside a disabled fieldset until hydration, and disabled
+  // again while a creation runs. Somebody who needs to ask a question is likely to be in
+  // exactly one of those two moments.
+  assert.ok(html.indexOf("</form>") < html.indexOf('<footer class="card community">'));
 });
