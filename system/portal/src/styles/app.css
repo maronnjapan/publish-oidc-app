@@ -16,7 +16,8 @@
 
 body {
   margin: 0;
-  padding: 2rem 1rem 4rem;
+  /* The bottom padding also keeps the floating launcher clear of the last card. */
+  padding: 2rem 1rem 6.5rem;
 }
 
 main {
@@ -340,20 +341,73 @@ code {
 }
 
 /*
- * The footer sits below the form's cards and is not part of it: it stays readable and its
- * links stay clickable while the form is disabled or busy.
+ * The consultation launcher: a button pinned to the bottom right corner, and the panel it
+ * opens above itself. `position: fixed` takes it out of the page's flow entirely, so it
+ * stays put while the form scrolls and never moves as the form grows.
  */
 .community {
-  margin-top: 2rem;
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 20;
 }
 
-.community p {
-  margin: 0.6rem 0 0;
+.community-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.4rem;
+  height: 3.4rem;
+  border-radius: 50%;
+  background: #165dcc;
+  color: #fff;
+  box-shadow: 0 0.5rem 1.4rem #16233b33;
+  cursor: pointer;
+  /* The disclosure triangle would sit inside the circle next to the icon. */
+  list-style: none;
+}
+
+.community-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.community-toggle:hover,
+.community[open] > .community-toggle {
+  background: #0f4aa8;
+}
+
+.community-icon {
+  width: 1.7rem;
+  height: 1.7rem;
+}
+
+/*
+ * Anchored to the button's own corner rather than the viewport's, so the panel opens
+ * upwards and the button underneath it does not move.
+ */
+.community-panel {
+  position: absolute;
+  right: 0;
+  bottom: 4.1rem;
+  width: min(21rem, calc(100vw - 2.5rem));
+  padding: 1.1rem 1.2rem;
+  background: #fff;
+  border: 1px solid #dce3ed;
+  border-radius: 0.9rem;
+  box-shadow: 0 0.8rem 2.2rem #1e3a5f26;
+}
+
+.community-panel h2 {
+  margin-bottom: 0.2rem;
+}
+
+.community-panel p {
+  margin: 0.7rem 0 0;
   color: #52627a;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
 }
 
-.community a {
+.community-panel a {
   color: #165dcc;
 }
 

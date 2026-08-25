@@ -160,22 +160,26 @@ test("community.json carries prose and a link for both entries", () => {
   for (const entry of [consult.link, blog.link]) assert.match(entry.url, /^https:\/\//);
 });
 
-test("the page ends with where to ask and what to read, straight from community.json", () => {
+test("a launcher pinned to the corner carries where to ask and what to read", () => {
   const { heading, consult, blog } = community.COMMUNITY;
-  const footer = html.slice(html.indexOf('<footer class="card community">'));
-  assert.ok(footer.startsWith('<footer class="card community">'), "the community footer is missing from the page");
+  const launcher = html.slice(html.indexOf('<details class="community">'), html.indexOf("</details>", html.indexOf('<details class="community">')));
+  assert.ok(launcher.startsWith('<details class="community">'), "the community launcher is missing from the page");
+  // Closed on arrival, and closed identically in both renders: the panel's open state lives
+  // in the DOM rather than in the reducer, so hydration has nothing to disagree about.
+  assert.doesNotMatch(html, /<details class="community" open>/);
+  assert.ok(launcher.includes(`aria-label="${heading}"`), "the button is an icon, so it needs its name in the accessibility tree");
   for (const text of [heading, consult.summary, consult.link.label, blog.summary, blog.link.label]) {
-    assert.ok(footer.includes(text), `${JSON.stringify(text)} is missing from the community footer`);
+    assert.ok(launcher.includes(text), `${JSON.stringify(text)} is missing from the community panel`);
   }
   // Asking for a topic happens in the channel, so the blog paragraph links back to it — and
   // the channel's URL is written once, in `consult`.
-  assert.ok(footer.includes(`<a href="${consult.link.url}" target="_blank" rel="noopener noreferrer">${blog.requestLinkLabel}</a>`));
-  assert.ok(footer.includes(`<a href="${blog.link.url}"`));
+  assert.ok(launcher.includes(`<a href="${consult.link.url}" target="_blank" rel="noopener noreferrer">${blog.requestLinkLabel}</a>`));
+  assert.ok(launcher.includes(`<a href="${blog.link.url}"`));
 });
 
-test("the footer is outside the form, so it stays usable while the form is disabled", () => {
+test("the launcher is outside the form, so it stays usable while the form is disabled", () => {
   // The whole form is rendered inside a disabled fieldset until hydration, and disabled
   // again while a creation runs. Somebody who needs to ask a question is likely to be in
-  // exactly one of those two moments.
-  assert.ok(html.indexOf("</form>") < html.indexOf('<footer class="card community">'));
+  // exactly one of those two moments — and a <details> opens in both, with no script at all.
+  assert.ok(html.indexOf("</form>") < html.indexOf('<details class="community">'));
 });
