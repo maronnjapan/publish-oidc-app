@@ -9,7 +9,7 @@ import type { ChoiceLink } from "./catalog";
  * `community.json` for the same reason the form's summaries live in their catalogs: the
  * wording and the URLs are content, so changing them is a data edit and the components stay
  * as they are. It is imported by both bundles, so the server render and the hydrating client
- * draw the same footer.
+ * draw the same panel.
  */
 
 /** One line of prose plus the link it points at. */
