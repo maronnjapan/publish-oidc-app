@@ -19,8 +19,8 @@ const generated = await generateOp(opId, path.resolve("test/fixtures/op-config.j
 test("OP generation runs the pinned @maronn-openid-connect CLI with Hono and records provenance", async () => {
   const metadata = JSON.parse(await readFile(path.join(generated.appDirectory, "op.json"), "utf8"));
   assert.equal(metadata.framework, "hono");
-  assert.equal(metadata.generator, "@maronn-openid-connect/cli@0.3.0");
-  assert.equal(metadata.core, "@maronn-openid-connect/core@0.1.1");
+  assert.equal(metadata.generator, "@maronn-openid-connect/cli@0.4.0");
+  assert.equal(metadata.core, "@maronn-openid-connect/core@0.2.0");
   assert.deepEqual(metadata.scopes, ["openid", "profile", "email"]);
 });
 

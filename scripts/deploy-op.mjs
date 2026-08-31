@@ -37,18 +37,25 @@ function parseRequestConfig(row, opId) {
 
 export const TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange";
 export const DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
+export const JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-bearer";
 
 /**
  * The generated OP authorizes a grant against the client's registered grantTypes, so an
  * experimental grant has to be registered alongside the standard ones or every exchange
- * comes back unauthorized_client.
+ * comes back unauthorized_client. id-jag reuses the token-exchange grant for issuance (a
+ * dedicated requested_token_type on the same URN) and adds jwt-bearer for redemption, so a
+ * Set dedupes it against a separately-selected token-exchange feature.
  */
 export function clientGrantTypes(features, experimental = {}) {
-  const grantTypes = ["authorization_code"];
-  if (features["refresh-token"]) grantTypes.push("refresh_token");
-  if (experimental["token-exchange"]) grantTypes.push(TOKEN_EXCHANGE_GRANT_TYPE);
-  if (experimental["device-authorization-grant"]) grantTypes.push(DEVICE_CODE_GRANT_TYPE);
-  return grantTypes;
+  const grantTypes = new Set(["authorization_code"]);
+  if (features["refresh-token"]) grantTypes.add("refresh_token");
+  if (experimental["token-exchange"]) grantTypes.add(TOKEN_EXCHANGE_GRANT_TYPE);
+  if (experimental["device-authorization-grant"]) grantTypes.add(DEVICE_CODE_GRANT_TYPE);
+  if (experimental["id-jag"]) {
+    grantTypes.add(TOKEN_EXCHANGE_GRANT_TYPE);
+    grantTypes.add(JWT_BEARER_GRANT_TYPE);
+  }
+  return [...grantTypes];
 }
 
 async function createSigningJwk() {

@@ -112,6 +112,31 @@
         "grant_types_supported"
       ],
       "options": []
+    },
+    {
+      "id": "id-jag",
+      "status": "supported",
+      "subpath": "@maronn-openid-connect/experimental/id-jag",
+      "label": "ID-JAG（Cross-App Access）",
+      "spec": "draft-ietf-oauth-identity-assertion-authz-grant-04",
+      "summary": "他のOPが発行したID Tokenやこのアプリの認証情報を、別ドメインの認可サーバー向けの短命なID-JAGへ交換・引き換えします（Cross-App Access）。",
+      "links": [
+        {
+          "label": "draft-ietf-oauth-identity-assertion-authz-grant-04",
+          "url": "https://datatracker.ietf.org/doc/html/draft-ietf-oauth-identity-assertion-authz-grant-04"
+        },
+        {
+          "label": "このリポジトリでの実装メモ",
+          "doc": "docs/experimental.md"
+        }
+      ],
+      "endpoints": [],
+      "discovery": [
+        "grant_types_supported",
+        "identity_chaining_requested_token_types_supported",
+        "authorization_grant_profiles_supported"
+      ],
+      "options": []
     }
   ]
 }
