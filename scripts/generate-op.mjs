@@ -128,6 +128,15 @@ export const EXPERIMENTAL_WIRING = {
       );
     },
   },
+  // ID-JAG (Cross-App Access) is generated whole by the CLI, entirely inside routes/token.ts.
+  // Both allowedAudiences (issuance) and trustedIdentityProviders (redemption) stay empty
+  // (fail safe): every request is rejected until the generated OP's idJagConfig is hand-edited,
+  // same rationale as token-exchange's allowedTargets. The portal only has to register the
+  // token-exchange and jwt-bearer grants on the client, which clientGrantTypes() in
+  // scripts/deploy-op.mjs does.
+  "id-jag": {
+    apply() {},
+  },
 };
 
 /**

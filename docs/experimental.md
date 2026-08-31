@@ -14,6 +14,7 @@
 | `token-exchange` | Token Exchange | RFC 8693 | `/token` の `grant_type=urn:ietf:params:oauth:grant-type:token-exchange` |
 | `jarm` | JWT Secured Authorization Response Mode | JARM | `response_mode=query.jwt` / `jwt` を指定したリクエストへの署名付きJWT応答 |
 | `device-authorization-grant` | Device Authorization Grant | RFC 8628 | `POST /device_authorization`、`/device`（GET/POST）、`POST /device/login`、`POST /device/approve` |
+| `id-jag` | ID-JAG（Cross-App Access） | draft-ietf-oauth-identity-assertion-authz-grant-04 | `/token` の `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`（requested_token_type=ID-JAG）でID-JAG発行、`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer` でID-JAG引き換え |
 
 CLI（`@maronn-openid-connect/cli`）がこれらの機能を自前で生成します。このリポジトリは選択内容を `--enable <feature-id>` として渡すだけで、ルート実装やDiscoveryメタデータは書きません。
 
@@ -53,6 +54,18 @@ CLI（`@maronn-openid-connect/cli`）がこれらの機能を自前で生成し�
 - `/device` の各POST（`/device`・`/device/login`・`/device/approve`）はCookieバインディングで保護されます（詳しくは生成される `store.ts` のコメントを参照）。これはCLIが常時有効にする防御で、オプション機能の `transaction-binding` とは別物です。
 - **永続化が必要です。** 生成コードの `InMemoryDeviceAuthorizationStore`（`store.ts`）は開発用のin-memory実装なので、`templates/cloudflare/persistence.ts` の `createD1DeviceAuthorizationStore` が共有D1版を実装します。レコードは `deviceCode` をキーに `oidc_records`（`kind = 'device-authorization:'`）へ、`userCode` からの逆引き用に `kind = 'device-authorization-user-code:'` の索引レコードを別途持ちます。`consume()` は `DELETE ... RETURNING` の1文で取り出すため、同じ `device_code` を同時に2回ポーリングしても片方しかトークンを得られません（RFC 8628 §3.5 の single use）。
 - `templates/cloudflare/index.ts` は `EXPERIMENTAL_WIRING['device-authorization-grant'].apply()` が `apply.ts` の `c.set('deviceAuthorizationStore', deviceAuthorizationStore)` をD1版優先に書き換えたうえで、entrypointのmiddlewareでD1版を常時 `context` に積みます（この機能を選ばなかったOPでは生成される経路が無いため無害です）。
+
+### `id-jag`
+
+- Cross-App Access（CAA）向けの Identity Assertion Authorization Grant です。この機能は「発行側（このOPがIdPとして振る舞う）」と「消費側（このOPがリソース認可サーバーとして振る舞う）」の両方を一度に有効にします。専用エンドポイントは増えず、`/token` が2つの新しいgrantを受け付けるようになるだけです。
+  - 発行（draft §4.3）: `grant_type=urn:ietf:params:oauth:grant-type:token-exchange` かつ `requested_token_type=urn:ietf:params:oauth:token-type:id-jag` のリクエストを、このOPが発行したID Token（`subject_token`）を検証したうえで、信頼する別ドメインの認可サーバー（`audience`）向けの署名付きID-JAG（RS256）に変換します。
+  - 引き換え（draft §4.4）: RFC 7523 の `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer` で、信頼するIdPが発行したID-JAG（`assertion`）を検証し、このOP自身のアクセストークンを発行します。ID Tokenやrefresh tokenは発行しません（draft §4.4.3）。
+- **既定では発行も引き換えも常に失敗します（fail safe）。** 生成される `routes/token.ts` の `idJagConfig.allowedAudiences`（発行を許す相手認可サーバー）と `idJagConfig.trustedIdentityProviders`（引き換えを許すIdPとそのJWKS）はどちらも空配列で生成されます。ポータルからは指定できないため、実際に使うには生成後の `routes/token.ts` を手で編集して埋める必要があります（token-exchangeの `allowedTargets` と同じ理由・同じ運用です）。
+- クライアントは confidential でなければなりません（`tokenEndpointAuthMethod !== 'none'`）。public クライアントからの要求は `unauthorized_client` です。
+- この機能を選ぶと、クライアントの登録 `grantTypes` に `urn:ietf:params:oauth:grant-type:token-exchange` と `urn:ietf:params:oauth:grant-type:jwt-bearer` の両方が追加されます（`scripts/deploy-op.mjs` の `clientGrantTypes`。`token-exchange` 機能と重複しても1つに畳まれます）。追加し忘れると発行・引き換えのどちらも `unauthorized_client` になります。
+- Discoveryに `identity_chaining_requested_token_types_supported`（発行できるrequested_token_type）と `authorization_grant_profiles_supported`（対応するgrantプロファイル）が加わり、`grant_types_supported` に両方のURNが追加されます。どの相手を実際に信頼するかは意図的に非開示です（draft §9.4）。
+- 新しい永続化は不要です。ID-JAGはaudience/issuer/exp/jtiを積んだ自己完結の署名付きJWTで、どこにも保存されません。引き換えで発行するアクセストークンは既存の `accessTokenStore` にそのまま乗ります。
+- 生成コードはRS256の署名鍵を要求します（JARM・JWKSと同じ鍵選択契約）。登録した鍵にRS256が無い場合、発行は `server_error` になります。
 
 選択内容は生成時に `src/index.ts` の `EXPERIMENTAL_FEATURES` へ直接埋め込みます。Worker変数として渡すと、あとから消えたり書き換わったりしたときに「PAR必須」のような設定が黙って緩む（fail open）ためです。
 

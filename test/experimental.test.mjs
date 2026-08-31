@@ -48,6 +48,7 @@ const optional = await buildWorker("maronn-op-paropt12345", { par: {} });
 const exchange = await buildWorker("maronn-op-exch12345678", { "token-exchange": {} });
 const jarm = await buildWorker("maronn-op-jarm12345678", { jarm: {} });
 const device = await buildWorker("maronn-op-device1234567", { "device-authorization-grant": {} });
+const idJag = await buildWorker("maronn-op-idjag12345678", { "id-jag": {} });
 
 /** Decodes a JARM response JWT's payload without verifying the signature (RS256 signing is CLI-owned and covered by its own conformance suite; this repository's wiring is what these tests exercise). */
 function decodeJarmPayload(jwt) {
@@ -92,7 +93,7 @@ async function completeLogin(fetchWorker, issuer, location) {
 test("the catalog only advertises features the CLI and the generator both know", async () => {
   const catalog = await readExperimentalCatalog();
   const supported = supportedFeatures(catalog);
-  assert.deepEqual(supported.map((feature) => feature.id).sort(), ["device-authorization-grant", "jarm", "par", "token-exchange"]);
+  assert.deepEqual(supported.map((feature) => feature.id).sort(), ["device-authorization-grant", "id-jag", "jarm", "par", "token-exchange"]);
   const cliHelp = await readFile("node_modules/@maronn-openid-connect/cli/dist/features.js", "utf8");
   for (const feature of supported) {
     assert.match(feature.subpath, /^@maronn-openid-connect\/experimental\//);
@@ -438,4 +439,68 @@ test("device: approving the verification UI lets the polling client redeem token
   // RFC 8628 §3.5: single use. A second poll for the same device_code must fail.
   const replay = await fetchWorker(new Request(`${device.issuer}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code, client_id: config.client_id, client_secret: config.client_secret }) }));
   assert.equal(replay.status, 400);
+});
+
+/** A syntactically valid but never-trusted ID-JAG-shaped assertion, for the redemption test below. */
+function fakeIdJagAssertion(issuer) {
+  const header = base64Url(JSON.stringify({ alg: "RS256", typ: "oauth-id-jag+jwt", kid: "fake" }));
+  const payload = base64Url(JSON.stringify({ iss: issuer, aud: idJag.issuer, sub: "someone", exp: Math.floor(Date.now() / 1000) + 300, iat: Math.floor(Date.now() / 1000) }));
+  return `${header}.${payload}.${base64Url("not-a-real-signature")}`;
+}
+
+test("id-jag: discovery advertises the identity-chaining metadata and both grants only when enabled", async () => {
+  const metadata = await (await (await idJag.client()).fetch(new Request(`${idJag.issuer}/.well-known/openid-configuration`))).json();
+  assert.ok(metadata.grant_types_supported.includes("urn:ietf:params:oauth:grant-type:token-exchange"));
+  assert.ok(metadata.grant_types_supported.includes("urn:ietf:params:oauth:grant-type:jwt-bearer"));
+  assert.deepEqual(metadata.identity_chaining_requested_token_types_supported, ["urn:ietf:params:oauth:token-type:id-jag"]);
+  assert.deepEqual(metadata.authorization_grant_profiles_supported, ["urn:ietf:params:oauth:grant-profile:id-jag"]);
+
+  const { fetch: plainFetch } = await device.client();
+  const plainMetadata = await (await plainFetch(new Request(`${device.issuer}/.well-known/openid-configuration`))).json();
+  assert.equal("identity_chaining_requested_token_types_supported" in plainMetadata, false);
+  assert.ok(!plainMetadata.grant_types_supported.includes("urn:ietf:params:oauth:grant-type:jwt-bearer"));
+});
+
+test("id-jag: issuance is registered on the client but fails safe with an empty allow list", async () => {
+  const { fetch: fetchWorker } = await idJag.client();
+  const tokens = await issueAccessToken(fetchWorker, idJag.issuer);
+  assert.ok(tokens.id_token, "the openid-scoped flow must issue an ID Token to use as the subject_token");
+
+  const response = await fetchWorker(new Request(`${idJag.issuer}/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+      requested_token_type: "urn:ietf:params:oauth:token-type:id-jag",
+      subject_token: tokens.id_token,
+      subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
+      audience: "https://resource-as.example",
+      client_id: config.client_id,
+      client_secret: config.client_secret,
+    }),
+  }));
+  assert.equal(response.status, 400, await response.clone().text());
+  // allowedAudiences is empty by default (fail safe, see docs/experimental.md), so the
+  // request is rejected on the audience check rather than on client authorization — proof
+  // that the token-exchange grant was actually registered on the client (clientGrantTypes).
+  assert.equal((await response.json()).error, "invalid_target");
+});
+
+test("id-jag: redemption is registered on the client but fails safe with no trusted identity provider", async () => {
+  const { fetch: fetchWorker } = await idJag.client();
+  const response = await fetchWorker(new Request(`${idJag.issuer}/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: fakeIdJagAssertion("https://untrusted-idp.example"),
+      client_id: config.client_id,
+      client_secret: config.client_secret,
+    }),
+  }));
+  assert.equal(response.status, 400, await response.clone().text());
+  // trustedIdentityProviders is empty by default (fail safe), so the request is rejected as
+  // an untrusted assertion rather than on client authorization — proof that the jwt-bearer
+  // grant was actually registered on the client (clientGrantTypes).
+  assert.equal((await response.json()).error, "invalid_grant");
 });
