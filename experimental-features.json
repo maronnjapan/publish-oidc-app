@@ -112,6 +112,17 @@
         "grant_types_supported"
       ],
       "options": []
+    },
+    {
+      "id": "id-jag",
+      "status": "detected",
+      "subpath": "@maronn-openid-connect/experimental/id-jag",
+      "label": "id-jag（未配線）",
+      "spec": "",
+      "summary": "@maronn-openid-connect/experimental@0.0.6 が公開した新機能です。docs/experimental.md の手順で配線するとポータルで選択できるようになります。",
+      "links": [],
+      "endpoints": [],
+      "detected_version": "0.0.6"
     }
   ]
 }
