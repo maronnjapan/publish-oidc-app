@@ -10,6 +10,15 @@ import { OP_ID_PATTERN, ROOT, readExperimentalCatalog, readOptionalCatalog, supp
 const execFile = promisify(execFileCallback);
 const FEATURES = ["pkce", "refresh-token", "introspection", "revocation", "request-object"];
 
+/**
+ * The scopes @maronn-openid-connect/core handles itself; anything else in config.scopes is
+ * a custom scope the publisher declared (portal-choices.json's "scope" group only ever
+ * offers these six, so the rest is by construction custom). Mirrors REQUIRED_SCOPE +
+ * OPTIONAL_SCOPES in system/portal/src/shared/rules.ts and KNOWN_STANDARD_SCOPES in
+ * scripts/check-package-updates.mjs; test/choices.test.mjs checks all three stay equal.
+ */
+const STANDARD_SCOPES = ["openid", "profile", "email", "address", "phone", "offline_access"];
+
 function parseConfig(text, opId) {
   let config;
   try { config = JSON.parse(text); } catch { throw new Error("OP config is not valid JSON"); }
@@ -128,6 +137,46 @@ export const EXPERIMENTAL_WIRING = {
       );
     },
   },
+  // ID-JAG (Cross-App Access) is generated whole by the CLI, entirely inside routes/token.ts.
+  // Both allowedAudiences (issuance) and trustedIdentityProviders (redemption) stay empty
+  // (fail safe): every request is rejected until the generated OP's idJagConfig is hand-edited,
+  // same rationale as token-exchange's allowedTargets. The portal only has to register the
+  // token-exchange and jwt-bearer grants on the client, which clientGrantTypes() in
+  // scripts/deploy-op.mjs does.
+  "id-jag": {
+    apply() {},
+  },
+  ciba: {
+    apply(sources) {
+      // The generated CIBA stores are in-memory. Let the D1-backed ones that the Worker
+      // entrypoint seeds into context win (templates/cloudflare/index.ts), same as PAR
+      // and the device authorization grant above.
+      sources["apply.ts"] = replaceOnce(
+        sources["apply.ts"],
+        "    c.set('cibaAuthenticationRequestStore', cibaAuthenticationRequestStore);\n    c.set('cibaLoginTransactionStore', cibaLoginTransactionStore);",
+        "    c.set('cibaAuthenticationRequestStore', c.get('cibaAuthenticationRequestStore') ?? cibaAuthenticationRequestStore);\n    c.set('cibaLoginTransactionStore', c.get('cibaLoginTransactionStore') ?? cibaLoginTransactionStore);",
+        "generated apply.ts",
+      );
+      // /backchannel_authentication never goes through /authorize, so it has to enforce
+      // the publisher's scope selection on its own — a client that asks for an
+      // unavailable scope should learn about it when it POSTs, not after the user
+      // approves it on the authentication device UI. Mirrors PAR and device
+      // authorization above.
+      sources["routes/backchannel-authentication.ts"] = replaceOnce(
+        sources["routes/backchannel-authentication.ts"],
+        "    const response = await processBackchannelAuthenticationRequest({",
+        "    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = (params['scope'] ?? '').split(' ').filter((scope) => scope.length > 0 && !allowedScopes.includes(scope));\n    if (unsupportedScopes.length > 0) {\n      throw new BackchannelAuthenticationError('invalid_scope', 'Unsupported scope: ' + unsupportedScopes.join(' '));\n    }\n\n    const response = await processBackchannelAuthenticationRequest({",
+        "generated routes/backchannel-authentication.ts",
+      );
+    },
+  },
+  // RFC 9701 (JWT Response for OAuth Token Introspection) is generated whole by the CLI:
+  // the alternate JWT response, its Accept-header negotiation (RFC 9701 §4/§8.2) and its
+  // Discovery metadata all live in routes/introspection.ts and routes/discovery.ts with no
+  // repository-owned knob to patch.
+  "jwt-introspection-response": {
+    apply() {},
+  },
 };
 
 /**
@@ -165,21 +214,33 @@ function patchGeneratedSource(sources, { jarmEnabled }) {
   // plain query response). The marker itself does not move, so a naive patch keeps
   // compiling against the pre-JARM signature and silently drops the `await` — this branch
   // is what test/experimental.test.mjs's jarm coverage guards against.
+  //
+  // Named disallowedScopes rather than unsupportedScopes: with --scope declared (see
+  // STANDARD_SCOPES above), the CLI's own generated code already declares a const
+  // `unsupportedScopes` earlier in this same function (scopes.ts's findUnsupportedScopes()),
+  // and esbuild rejects the duplicate declaration.
   const errorRedirectCall = jarmEnabled
-    ? "await buildErrorRedirect(jarmResponse, validatedRequest.redirectUri, 'invalid_scope', validatedRequest.state, 'Unsupported scope: ' + unsupportedScopes.join(' '), issuer)"
-    : "buildErrorRedirect(validatedRequest.redirectUri, 'invalid_scope', validatedRequest.state, 'Unsupported scope: ' + unsupportedScopes.join(' '), issuer)";
+    ? "await buildErrorRedirect(jarmResponse, validatedRequest.redirectUri, 'invalid_scope', validatedRequest.state, 'Unsupported scope: ' + disallowedScopes.join(' '), issuer)"
+    : "buildErrorRedirect(validatedRequest.redirectUri, 'invalid_scope', validatedRequest.state, 'Unsupported scope: ' + disallowedScopes.join(' '), issuer)";
   sources["routes/authorize.ts"] = replaceOnce(
     sources["routes/authorize.ts"],
     marker,
-    `    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = validatedRequest.scope.filter((scope) => !allowedScopes.includes(scope));\n    if (unsupportedScopes.length > 0) {\n      return c.redirect(${errorRedirectCall});\n    }\n\n${marker}`,
+    `    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const disallowedScopes = validatedRequest.scope.filter((scope) => !allowedScopes.includes(scope));\n    if (disallowedScopes.length > 0) {\n      return c.redirect(${errorRedirectCall});\n    }\n\n${marker}`,
     "generated authorize.ts",
   );
 
   // offline_access drops out of the literal when the refresh-token feature is disabled.
+  // With no custom scopes declared the CLI emits the literal below; with `--scope` it emits
+  // `[...SUPPORTED_SCOPES]` from the generated scopes.ts instead (see STANDARD_SCOPES above).
+  // Either way the publisher's own selection, not the CLI's static list, decides what this
+  // OP actually advertises.
   const scopeLiteral = /scopesSupported: \['openid', 'profile', 'email', 'address', 'phone'(?:, 'offline_access')?\],/;
-  if (!scopeLiteral.test(sources["routes/discovery.ts"])) throw new Error("generated discovery.ts does not contain the expected scopes marker");
-  sources["routes/discovery.ts"] = sources["routes/discovery.ts"].replace(
-    scopeLiteral,
+  const scopeSpread = /scopesSupported: \[\.\.\.SUPPORTED_SCOPES\],/;
+  const discoverySource = sources["routes/discovery.ts"];
+  const scopesMarker = scopeLiteral.test(discoverySource) ? scopeLiteral : scopeSpread.test(discoverySource) ? scopeSpread : null;
+  if (!scopesMarker) throw new Error("generated discovery.ts does not contain the expected scopes marker");
+  sources["routes/discovery.ts"] = discoverySource.replace(
+    scopesMarker,
     "scopesSupported: (c.get('allowedScopes') as string[] | undefined) ?? ['openid'],",
   );
 
@@ -242,8 +303,13 @@ export async function generateOp(opId, configPath) {
   const optionalIds = Object.keys(optional);
 
   const disabled = FEATURES.filter((name) => config.features[name] === false);
+  // Anything in config.scopes beyond the six standard scopes is a custom scope the
+  // publisher declared (see docs/custom-scopes.md); the CLI needs to know about it at
+  // generation time so it can advertise it and reject requests for anything else.
+  const customScopeIds = config.scopes.filter((scope) => !STANDARD_SCOPES.includes(scope));
   const args = ["exec", "--yes", `--package=${cliPackage}`, "--", "maronn-oidc", "generate", "hono", "--output", providerDirectory];
   if (disabled.length > 0) args.push("--disable", disabled.join(","));
+  if (customScopeIds.length > 0) args.push("--scope", customScopeIds.join(","));
   // Both opt-in groups share one --enable list: the CLI namespaces its feature ids across
   // the optional and experimental groups, so the selection is what decides which is which.
   const enabledIds = [...optionalIds, ...experimentalIds];
@@ -257,6 +323,7 @@ export async function generateOp(opId, configPath) {
     "routes/discovery.ts",
     ...(experimentalIds.includes("par") ? ["routes/par.ts"] : []),
     ...(experimentalIds.includes("device-authorization-grant") ? ["routes/device-authorization.ts"] : []),
+    ...(experimentalIds.includes("ciba") ? ["routes/backchannel-authentication.ts"] : []),
   ];
   const sources = Object.fromEntries(await Promise.all(
     patched.map(async (file) => [file, await readFile(path.join(providerDirectory, file), "utf8")]),

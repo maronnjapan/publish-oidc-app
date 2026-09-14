@@ -144,6 +144,14 @@ test("offline_access is selectable on arrival, because refresh tokens default to
   assert.doesNotMatch(html.slice(html.indexOf(scope), html.indexOf(scope) + 120), /checked/);
 });
 
+test("the custom scopes field renders inside the scope card, empty and enabled", () => {
+  const field = 'id="custom-scopes"';
+  assert.ok(html.includes(field));
+  const row = html.slice(html.indexOf(field), html.indexOf(field) + 200);
+  assert.doesNotMatch(row, /disabled/);
+  assert.doesNotMatch(row, /value="[^"]+"/, "the field must start empty, not pre-filled");
+});
+
 test("the page starts with one empty account row and a quota placeholder", () => {
   assert.equal([...html.matchAll(/class="username"/g)].length, 1);
   assert.match(html, /0 \/ 5件|1 \/ 5件/);

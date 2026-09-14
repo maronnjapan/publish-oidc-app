@@ -133,6 +133,30 @@ test("openid is always sent and is never a choice", () => {
   assert.equal("openid" in state.initialFormState().scopes, false);
 });
 
+test("custom scopes are parsed from the free-text field, deduplicated, and appended to the selection", () => {
+  const withCustom = reduce(state.initialFormState(), {
+    type: "set-custom-scopes",
+    value: " reports.read, reports.write  reports.read\n",
+  });
+  assert.deepEqual(state.customScopeIds(withCustom), ["reports.read", "reports.write"]);
+  assert.deepEqual(state.selectedScopes(withCustom), ["openid", "reports.read", "reports.write"]);
+  assert.equal(validation.customScopesError(withCustom), "");
+});
+
+test("an invalid or excessive custom scope is reported without touching the standard scopes", () => {
+  const badChars = reduce(state.initialFormState(), { type: "set-custom-scopes", value: "Reports Read!" });
+  assert.notEqual(validation.customScopesError(badChars), "");
+
+  const tooMany = reduce(state.initialFormState(), {
+    type: "set-custom-scopes",
+    value: Array.from({ length: 11 }, (_, index) => `custom${index}`).join(","),
+  });
+  assert.notEqual(validation.customScopesError(tooMany), "");
+
+  const clean = reduce(state.initialFormState(), { type: "set-custom-scopes", value: "" });
+  assert.equal(validation.customScopesError(clean), "");
+});
+
 test("accounts are capped at five and the last row cannot be removed", () => {
   let current = state.initialFormState();
   for (let index = 0; index < 10; index += 1) current = state.formReducer(current, { type: "add-user" });
@@ -178,10 +202,11 @@ test("the request body the form builds is one the Worker accepts", () => {
     filledState(),
     { type: "toggle-scope", id: "profile", value: true },
     { type: "toggle-opt-in", group: "optional", id: "transaction-binding", value: true },
+    { type: "set-custom-scopes", value: "reports.read" },
   );
   const parsed = shared.parseCreateApp(state.toRequestBody(ready));
   assert.equal(parsed.ok, true, parsed.message);
-  assert.deepEqual(parsed.value.scopes, ["openid", "profile"]);
+  assert.deepEqual(parsed.value.scopes, ["openid", "profile", "reports.read"]);
   assert.deepEqual(parsed.value.optional, { "transaction-binding": {} });
 });
 

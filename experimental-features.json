@@ -112,6 +112,84 @@
         "grant_types_supported"
       ],
       "options": []
+    },
+    {
+      "id": "id-jag",
+      "status": "supported",
+      "subpath": "@maronn-openid-connect/experimental/id-jag",
+      "label": "ID-JAG（Cross-App Access）",
+      "spec": "draft-ietf-oauth-identity-assertion-authz-grant-04",
+      "summary": "他のOPが発行したID Tokenやこのアプリの認証情報を、別ドメインの認可サーバー向けの短命なID-JAGへ交換・引き換えします（Cross-App Access）。",
+      "links": [
+        {
+          "label": "draft-ietf-oauth-identity-assertion-authz-grant-04",
+          "url": "https://datatracker.ietf.org/doc/html/draft-ietf-oauth-identity-assertion-authz-grant-04"
+        },
+        {
+          "label": "このリポジトリでの実装メモ",
+          "doc": "docs/experimental.md"
+        }
+      ],
+      "endpoints": [],
+      "discovery": [
+        "grant_types_supported",
+        "identity_chaining_requested_token_types_supported",
+        "authorization_grant_profiles_supported"
+      ],
+      "options": []
+    },
+    {
+      "id": "ciba",
+      "status": "supported",
+      "subpath": "@maronn-openid-connect/experimental/ciba",
+      "label": "CIBA（Client-Initiated Backchannel Authentication）",
+      "spec": "CIBA Core 1.0",
+      "summary": "ブラウザ操作ができない消費デバイス（コールセンター端末・キオスク端末等）向けに、login_hintで名指しした利用者の別ブラウザでの承認を待つ認可方式を追加します（pollモードのみ）。",
+      "links": [
+        {
+          "label": "CIBA Core 1.0",
+          "url": "https://openid.net/specs/openid-client-initiated-backchannel-authentication-core-1_0.html"
+        },
+        {
+          "label": "このリポジトリでの実装メモ",
+          "doc": "docs/experimental.md"
+        }
+      ],
+      "endpoints": [
+        "POST /backchannel_authentication",
+        "GET /ciba",
+        "POST /ciba/login",
+        "POST /ciba/approve"
+      ],
+      "discovery": [
+        "backchannel_authentication_endpoint",
+        "backchannel_token_delivery_modes_supported",
+        "grant_types_supported"
+      ],
+      "options": []
+    },
+    {
+      "id": "jwt-introspection-response",
+      "status": "supported",
+      "subpath": "@maronn-openid-connect/experimental/jwt-introspection-response",
+      "label": "JWT Introspection Response",
+      "spec": "RFC 9701",
+      "summary": "POST /introspect の応答を、Acceptヘッダでapplication/token-introspection+jwtを指定した呼び出し元にだけ署名付きJWT（RS256）として返せるようにします。指定しない呼び出しは今まで通りJSONのままです。",
+      "links": [
+        {
+          "label": "RFC 9701",
+          "url": "https://datatracker.ietf.org/doc/html/rfc9701"
+        },
+        {
+          "label": "このリポジトリでの実装メモ",
+          "doc": "docs/experimental.md"
+        }
+      ],
+      "endpoints": [],
+      "discovery": [
+        "introspection_signing_alg_values_supported"
+      ],
+      "options": []
     }
   ]
 }

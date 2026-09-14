@@ -34,6 +34,14 @@ const TRACKED_PACKAGES = [
 /** Feature toggles the generator and the portal currently understand. */
 const KNOWN_CLI_FEATURES = ["pkce", "refresh-token", "introspection", "revocation", "request-object"];
 
+/**
+ * The standard scopes @maronn-openid-connect/core handles itself, whatever the publisher
+ * declares with --scope. Mirrors REQUIRED_SCOPE + OPTIONAL_SCOPES in
+ * system/portal/src/shared/rules.ts and STANDARD_SCOPES in scripts/generate-op.mjs; test/
+ * choices.test.mjs checks all three stay equal.
+ */
+const KNOWN_STANDARD_SCOPES = ["openid", "profile", "email", "address", "phone", "offline_access"];
+
 function splitVersion(version) {
   const [core, prerelease = ""] = version.split(/-(.*)/s);
   const numbers = core.split(".").map((part) => Number.parseInt(part, 10));
@@ -138,7 +146,25 @@ const HELP_SECTIONS = {
   features: /^Features \(all enabled by default\):[^\S\n]*(.+)$/m,
   optional: /^Optional features \(disabled by default\):[^\S\n]*(.+)$/m,
   experimental: /^Experimental features \(disabled by default\):[^\S\n]*(.+)$/m,
+  // Unlike the three groups above this is not a comma list of feature ids: it is prose
+  // describing the --scope flag, wrapped onto several lines. The heading alone is enough
+  // to keep it out of unknownHelpHeadings(); standardScopesFromHelp() below reads the
+  // "standard scopes (...)" parenthetical it embeds for the one thing worth tracking here.
+  customScopes: /^Custom scopes \([^)\n]*\):/m,
 };
+
+/**
+ * The CLI's own list of standard scope ids, read out of the "Custom scopes" section's prose
+ * (see HELP_SECTIONS.customScopes above). Returns null when the CLI has no such section at
+ * all, so the caller can tell "no --scope support" apart from "support, but the wording
+ * changed and this no longer parses".
+ */
+export function standardScopesFromHelp(helpText) {
+  if (!HELP_SECTIONS.customScopes.test(helpText)) return null;
+  const match = helpText.match(/standard scopes \(([\s\S]*?)\)/);
+  if (!match) return [];
+  return match[1].replace(/\s+/g, " ").trim().split(",").map((scope) => scope.trim()).filter(Boolean);
+}
 
 /** Every top-level "<name> (<qualifier>):" heading the help text prints, heading only. */
 export function helpGroupHeadings(helpText) {
@@ -170,6 +196,7 @@ async function cliFeatures(version) {
     features: parseFeatureList(standard[1]),
     optional: optional ? parseFeatureList(optional[1]) : [],
     experimental: experimental ? parseFeatureList(experimental[1]) : [],
+    standardScopes: standardScopesFromHelp(stdout),
     unknownSections: unknownHelpHeadings(stdout),
   };
 }
@@ -257,14 +284,30 @@ export async function collectReport({ inspectCliFeatures = true } = {}) {
     : null;
 
   const optionalWork = optional ? optional.added.length + optional.removed.length + optional.unwired.length : 0;
+
+  // Custom scopes (--scope) are not an opt-in feature catalog — a publisher declares
+  // arbitrary ids at OP creation time, so there is nothing to mark "detected"/"supported".
+  // The one thing worth tracking here is whether the CLI's own standard-scope list (which
+  // --scope may not redeclare) still matches what this repository assumes.
+  const customScopes = toggles
+    ? {
+        supported: toggles.standardScopes !== null,
+        standardScopes: toggles.standardScopes ?? [],
+        added: (toggles.standardScopes ?? []).filter((scope) => !KNOWN_STANDARD_SCOPES.includes(scope)),
+        removed: toggles.standardScopes ? KNOWN_STANDARD_SCOPES.filter((scope) => !toggles.standardScopes.includes(scope)) : [],
+      }
+    : null;
+  const customScopesWork = customScopes ? customScopes.added.length + customScopes.removed.length : 0;
+
   return {
     checkedAt: new Date().toISOString(),
     packages,
     experimental,
     optional,
     cli,
+    customScopes,
     hasUpdates: packages.some((entry) => entry.hasUpdate),
-    hasCatalogWork: experimental.added.length > 0 || experimental.removed.length > 0 || cli.added.length > 0 || cli.removed.length > 0 || cli.ungeneratable.length > 0 || cli.unknownSections.length > 0 || optionalWork > 0,
+    hasCatalogWork: experimental.added.length > 0 || experimental.removed.length > 0 || cli.added.length > 0 || cli.removed.length > 0 || cli.ungeneratable.length > 0 || cli.unknownSections.length > 0 || optionalWork > 0 || customScopesWork > 0,
   };
 }
 
@@ -324,6 +367,22 @@ export function renderReport(report) {
     if (report.cli.ungeneratable.length > 0) lines.push(`- **CLIが生成できないカタログ項目: ${report.cli.ungeneratable.map((feature) => `\`${feature}\``).join(", ")}** — カタログでは supported ですが最新CLIの \`--enable\` が受け付けません。カタログを \`detected\` へ戻すか、CLIの更新を待ってください。`);
     if (report.cli.unknownSections.length > 0) {
       lines.push(`- **未知のトグル分類: ${report.cli.unknownSections.map((heading) => `\`${heading}\``).join(", ")}** — \`--help\` にこのリポジトリが解釈していない見出しがあります。新しいカテゴリなら \`scripts/check-package-updates.mjs\` の \`HELP_SECTIONS\` に追加し、対応するカタログと配線を用意してください。`);
+    }
+  }
+  lines.push("");
+
+  lines.push("### カスタムスコープ（`--scope`）");
+  if (!report.customScopes) {
+    lines.push("- `maronn-oidc --help` を読んでいないため判定できません（`--skip-cli-features`）。");
+  } else if (!report.customScopes.supported) {
+    lines.push("- 最新CLIの `--help` に `Custom scopes` セクションがありません（`--scope` 未対応、または見出しの文言が変わってこのリポジトリが解釈できなくなっています）。");
+  } else {
+    lines.push(`- 標準スコープ: ${report.customScopes.standardScopes.map((scope) => `\`${scope}\``).join(", ")}`);
+    if (report.customScopes.added.length > 0) {
+      lines.push(`- **未知の標準スコープ: ${report.customScopes.added.map((scope) => `\`${scope}\``).join(", ")}** — 最新CLIが自前で処理する標準スコープに増減があります。\`scripts/check-package-updates.mjs\` の \`KNOWN_STANDARD_SCOPES\`、\`scripts/generate-op.mjs\` の \`STANDARD_SCOPES\`、\`system/portal/src/shared/rules.ts\` の \`OPTIONAL_SCOPES\` を合わせてください。`);
+    }
+    if (report.customScopes.removed.length > 0) {
+      lines.push(`- **消えた標準スコープ: ${report.customScopes.removed.map((scope) => `\`${scope}\``).join(", ")}** — 同上。`);
     }
   }
   lines.push("");

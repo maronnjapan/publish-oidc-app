@@ -59,6 +59,13 @@ test("catalog ids match the lists the portal, generator and follow-up check enfo
   const literal = (source, name) => JSON.parse(source.match(new RegExp(`${name} = (\\[[^\\]]*\\])`))[1].replace(/'/g, '"'));
   assert.deepEqual(literal(await readFile("scripts/generate-op.mjs", "utf8"), "const FEATURES"), [...FEATURE_NAMES]);
   assert.deepEqual(literal(await readFile("scripts/check-package-updates.mjs", "utf8"), "const KNOWN_CLI_FEATURES"), [...FEATURE_NAMES]);
+
+  // Custom scopes (docs/custom-scopes.md) has no catalog of its own, but the generator and
+  // the follow-up check both need to know which scopes are standard (i.e. NOT custom), and
+  // that list has to match the scope group above exactly.
+  const standardScopes = [REQUIRED_SCOPE, ...OPTIONAL_SCOPES];
+  assert.deepEqual(literal(await readFile("scripts/generate-op.mjs", "utf8"), "const STANDARD_SCOPES"), standardScopes);
+  assert.deepEqual(literal(await readFile("scripts/check-package-updates.mjs", "utf8"), "const KNOWN_STANDARD_SCOPES"), standardScopes);
 });
 
 test("declared links resolve, and repository links point at a file that exists", async () => {

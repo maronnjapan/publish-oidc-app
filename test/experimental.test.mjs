@@ -48,9 +48,12 @@ const optional = await buildWorker("maronn-op-paropt12345", { par: {} });
 const exchange = await buildWorker("maronn-op-exch12345678", { "token-exchange": {} });
 const jarm = await buildWorker("maronn-op-jarm12345678", { jarm: {} });
 const device = await buildWorker("maronn-op-device1234567", { "device-authorization-grant": {} });
+const idJag = await buildWorker("maronn-op-idjag12345678", { "id-jag": {} });
+const ciba = await buildWorker("maronn-op-ciba12345678", { ciba: {} });
+const jwtIntrospection = await buildWorker("maronn-op-jwtintro123", { "jwt-introspection-response": {} });
 
-/** Decodes a JARM response JWT's payload without verifying the signature (RS256 signing is CLI-owned and covered by its own conformance suite; this repository's wiring is what these tests exercise). */
-function decodeJarmPayload(jwt) {
+/** Decodes a JWT's payload without verifying the signature (RS256 signing is CLI/package-owned and covered by its own conformance suite; this repository's wiring is what these tests exercise). */
+function decodeJwtPayload(jwt) {
   const [, payload] = jwt.split(".");
   return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
 }
@@ -92,7 +95,7 @@ async function completeLogin(fetchWorker, issuer, location) {
 test("the catalog only advertises features the CLI and the generator both know", async () => {
   const catalog = await readExperimentalCatalog();
   const supported = supportedFeatures(catalog);
-  assert.deepEqual(supported.map((feature) => feature.id).sort(), ["device-authorization-grant", "jarm", "par", "token-exchange"]);
+  assert.deepEqual(supported.map((feature) => feature.id).sort(), ["ciba", "device-authorization-grant", "id-jag", "jarm", "jwt-introspection-response", "par", "token-exchange"]);
   const cliHelp = await readFile("node_modules/@maronn-openid-connect/cli/dist/features.js", "utf8");
   for (const feature of supported) {
     assert.match(feature.subpath, /^@maronn-openid-connect\/experimental\//);
@@ -322,7 +325,7 @@ test("jarm: an authorization request outside the selected scopes gets its invali
   // JARM Section 2.1: no plain error / error_description / state parameter is added
   // alongside the signed response.
   assert.deepEqual([...location.searchParams.keys()], ["response"]);
-  const payload = decodeJarmPayload(location.searchParams.get("response"));
+  const payload = decodeJwtPayload(location.searchParams.get("response"));
   assert.equal(payload.error, "invalid_scope");
   assert.equal(payload.state, "jarm-scope-error");
 });
@@ -340,7 +343,7 @@ test("jarm: response_mode=jwt drives the full flow to a token via the signed res
   // signed, so the shared completeLogin() helper drives it exactly like the other tests.
   const callback = await completeLogin(fetchWorker, jarm.issuer, authorize.headers.get("location"));
   assert.deepEqual([...callback.searchParams.keys()], ["response"]);
-  const payload = decodeJarmPayload(callback.searchParams.get("response"));
+  const payload = decodeJwtPayload(callback.searchParams.get("response"));
   assert.equal(payload.iss, jarm.issuer);
   assert.equal(payload.aud, config.client_id);
   assert.equal(payload.state, "jarm-state");
@@ -438,4 +441,201 @@ test("device: approving the verification UI lets the polling client redeem token
   // RFC 8628 §3.5: single use. A second poll for the same device_code must fail.
   const replay = await fetchWorker(new Request(`${device.issuer}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code, client_id: config.client_id, client_secret: config.client_secret }) }));
   assert.equal(replay.status, 400);
+});
+
+/** A syntactically valid but never-trusted ID-JAG-shaped assertion, for the redemption test below. */
+function fakeIdJagAssertion(issuer) {
+  const header = base64Url(JSON.stringify({ alg: "RS256", typ: "oauth-id-jag+jwt", kid: "fake" }));
+  const payload = base64Url(JSON.stringify({ iss: issuer, aud: idJag.issuer, sub: "someone", exp: Math.floor(Date.now() / 1000) + 300, iat: Math.floor(Date.now() / 1000) }));
+  return `${header}.${payload}.${base64Url("not-a-real-signature")}`;
+}
+
+test("id-jag: discovery advertises the identity-chaining metadata and both grants only when enabled", async () => {
+  const metadata = await (await (await idJag.client()).fetch(new Request(`${idJag.issuer}/.well-known/openid-configuration`))).json();
+  assert.ok(metadata.grant_types_supported.includes("urn:ietf:params:oauth:grant-type:token-exchange"));
+  assert.ok(metadata.grant_types_supported.includes("urn:ietf:params:oauth:grant-type:jwt-bearer"));
+  assert.deepEqual(metadata.identity_chaining_requested_token_types_supported, ["urn:ietf:params:oauth:token-type:id-jag"]);
+  assert.deepEqual(metadata.authorization_grant_profiles_supported, ["urn:ietf:params:oauth:grant-profile:id-jag"]);
+
+  const { fetch: plainFetch } = await device.client();
+  const plainMetadata = await (await plainFetch(new Request(`${device.issuer}/.well-known/openid-configuration`))).json();
+  assert.equal("identity_chaining_requested_token_types_supported" in plainMetadata, false);
+  assert.ok(!plainMetadata.grant_types_supported.includes("urn:ietf:params:oauth:grant-type:jwt-bearer"));
+});
+
+test("id-jag: issuance is registered on the client but fails safe with an empty allow list", async () => {
+  const { fetch: fetchWorker } = await idJag.client();
+  const tokens = await issueAccessToken(fetchWorker, idJag.issuer);
+  assert.ok(tokens.id_token, "the openid-scoped flow must issue an ID Token to use as the subject_token");
+
+  const response = await fetchWorker(new Request(`${idJag.issuer}/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+      requested_token_type: "urn:ietf:params:oauth:token-type:id-jag",
+      subject_token: tokens.id_token,
+      subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
+      audience: "https://resource-as.example",
+      client_id: config.client_id,
+      client_secret: config.client_secret,
+    }),
+  }));
+  assert.equal(response.status, 400, await response.clone().text());
+  // allowedAudiences is empty by default (fail safe, see docs/experimental.md), so the
+  // request is rejected on the audience check rather than on client authorization — proof
+  // that the token-exchange grant was actually registered on the client (clientGrantTypes).
+  assert.equal((await response.json()).error, "invalid_target");
+});
+
+test("id-jag: redemption is registered on the client but fails safe with no trusted identity provider", async () => {
+  const { fetch: fetchWorker } = await idJag.client();
+  const response = await fetchWorker(new Request(`${idJag.issuer}/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: fakeIdJagAssertion("https://untrusted-idp.example"),
+      client_id: config.client_id,
+      client_secret: config.client_secret,
+    }),
+  }));
+  assert.equal(response.status, 400, await response.clone().text());
+  // trustedIdentityProviders is empty by default (fail safe), so the request is rejected as
+  // an untrusted assertion rather than on client authorization — proof that the jwt-bearer
+  // grant was actually registered on the client (clientGrantTypes).
+  assert.equal((await response.json()).error, "invalid_grant");
+});
+
+/** The named Set-Cookie value among possibly several on one response (fetch's getSetCookie()). */
+function namedCookie(response, name) {
+  const cookies = response.headers.getSetCookie ? response.headers.getSetCookie() : [response.headers.get("set-cookie") ?? ""];
+  return (cookies.find((cookie) => cookie.startsWith(`${name}=`)) ?? "").split(";")[0];
+}
+
+async function requestBackchannelAuthentication(fetchWorker, issuer, overrides = {}) {
+  const body = new URLSearchParams({
+    client_id: config.client_id,
+    client_secret: config.client_secret,
+    scope: "openid profile",
+    login_hint: "alice",
+    ...overrides,
+  });
+  return fetchWorker(new Request(`${issuer}/backchannel_authentication`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body }));
+}
+
+/** Drives the /ciba authentication device UI (sign in -> approve) to completion. */
+async function completeCibaApproval(fetchWorker, issuer) {
+  const entry = await fetchWorker(new Request(`${issuer}/ciba`));
+  assert.equal(entry.status, 200, await entry.clone().text());
+  const bindingCookie = cookiePair(entry);
+  const entryHtml = await entry.clone().text();
+  const loginTransactionId = entryHtml.match(/name="login_transaction_id" value="([^"]+)"/)?.[1];
+  const loginCsrf = entryHtml.match(/name="csrf_token" value="([^"]+)"/)?.[1];
+  assert.ok(loginTransactionId && loginCsrf);
+
+  const login = await fetchWorker(new Request(`${issuer}/ciba/login`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", cookie: bindingCookie },
+    body: new URLSearchParams({ login_transaction_id: loginTransactionId, csrf_token: loginCsrf, username: "alice", password: "password-123" }),
+  }));
+  assert.equal(login.status, 200, await login.clone().text());
+  const sessionCookie = namedCookie(login, "session_id");
+  const loginHtml = await login.clone().text();
+  const authReqId = loginHtml.match(/name="auth_req_id" value="([^"]+)"/)?.[1];
+  const approveCsrf = loginHtml.match(/name="csrf_token" value="([^"]+)"/)?.[1];
+  assert.ok(sessionCookie && authReqId && approveCsrf);
+
+  const approve = await fetchWorker(new Request(`${issuer}/ciba/approve`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", cookie: sessionCookie },
+    body: new URLSearchParams({ auth_req_id: authReqId, csrf_token: approveCsrf, decision: "approve" }),
+  }));
+  assert.equal(approve.status, 200, await approve.clone().text());
+}
+
+test("ciba: discovery advertises the backchannel authentication endpoint and grant only when enabled", async () => {
+  const metadata = await (await (await ciba.client()).fetch(new Request(`${ciba.issuer}/.well-known/openid-configuration`))).json();
+  assert.equal(metadata.backchannel_authentication_endpoint, `${ciba.issuer}/backchannel_authentication`);
+  assert.deepEqual(metadata.backchannel_token_delivery_modes_supported, ["poll"]);
+  assert.ok(metadata.grant_types_supported.includes("urn:openid:params:grant-type:ciba"));
+
+  const { fetch: plainFetch } = await device.client();
+  const plainMetadata = await (await plainFetch(new Request(`${device.issuer}/.well-known/openid-configuration`))).json();
+  assert.equal("backchannel_authentication_endpoint" in plainMetadata, false);
+  assert.ok(!plainMetadata.grant_types_supported.includes("urn:openid:params:grant-type:ciba"));
+});
+
+test("ciba: /backchannel_authentication enforces the selected scopes and persists to the shared D1", async () => {
+  const { DB, fetch: fetchWorker } = await ciba.client();
+  const unsupported = await requestBackchannelAuthentication(fetchWorker, ciba.issuer, { scope: "openid address" });
+  assert.equal(unsupported.status, 400);
+  assert.equal((await unsupported.json()).error, "invalid_scope");
+
+  const response = await requestBackchannelAuthentication(fetchWorker, ciba.issuer);
+  assert.equal(response.status, 200, await response.clone().text());
+  const body = await response.json();
+  assert.ok(body.auth_req_id);
+  assert.equal(body.interval, 5);
+  assert.ok(DB.kindsInUse().includes("ciba-request:"));
+  // The record_key is a SHA-256 digest of auth_req_id, not the value itself (same guarantee
+  // as PAR's and device authorization's own tests): only the stored value may name it.
+  assert.equal([...DB.records.keys()].some((key) => key.includes(body.auth_req_id)), false);
+});
+
+test("ciba: polling before approval answers authorization_pending", async () => {
+  const { fetch: fetchWorker } = await ciba.client();
+  const { auth_req_id } = await (await requestBackchannelAuthentication(fetchWorker, ciba.issuer)).json();
+  const poll = await fetchWorker(new Request(`${ciba.issuer}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:openid:params:grant-type:ciba", auth_req_id, client_id: config.client_id, client_secret: config.client_secret }) }));
+  assert.equal(poll.status, 400);
+  assert.equal((await poll.json()).error, "authorization_pending");
+});
+
+test("ciba: approving the authentication device UI lets the polling client redeem tokens, once", async () => {
+  const { fetch: fetchWorker } = await ciba.client();
+  const { auth_req_id } = await (await requestBackchannelAuthentication(fetchWorker, ciba.issuer)).json();
+  await completeCibaApproval(fetchWorker, ciba.issuer);
+
+  const poll = await fetchWorker(new Request(`${ciba.issuer}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:openid:params:grant-type:ciba", auth_req_id, client_id: config.client_id, client_secret: config.client_secret }) }));
+  assert.equal(poll.status, 200, await poll.clone().text());
+  const tokens = await poll.json();
+  assert.ok(tokens.access_token);
+  assert.ok(tokens.id_token);
+  assert.match(tokens.scope, /\bprofile\b/);
+
+  // The auth_req_id is single use (consume()), same guarantee as PAR's request_uri and
+  // device authorization's device_code above. A second poll must fail.
+  const replay = await fetchWorker(new Request(`${ciba.issuer}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "urn:openid:params:grant-type:ciba", auth_req_id, client_id: config.client_id, client_secret: config.client_secret }) }));
+  assert.equal(replay.status, 400);
+  assert.equal((await replay.json()).error, "invalid_grant");
+});
+
+test("jwt-introspection-response: discovery advertises the signing alg only when enabled", async () => {
+  const metadata = await (await (await jwtIntrospection.client()).fetch(new Request(`${jwtIntrospection.issuer}/.well-known/openid-configuration`))).json();
+  assert.deepEqual(metadata.introspection_signing_alg_values_supported, ["RS256"]);
+
+  const { fetch: plainFetch } = await device.client();
+  const plainMetadata = await (await plainFetch(new Request(`${device.issuer}/.well-known/openid-configuration`))).json();
+  assert.equal("introspection_signing_alg_values_supported" in plainMetadata, false);
+});
+
+test("jwt-introspection-response: a caller that asks for the JWT media type gets a signed response, everyone else gets the same JSON as before", async () => {
+  const { fetch: fetchWorker } = await jwtIntrospection.client();
+  const tokens = await issueAccessToken(fetchWorker, jwtIntrospection.issuer);
+
+  const plainResponse = await fetchWorker(new Request(`${jwtIntrospection.issuer}/introspect`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ token: tokens.access_token, client_id: config.client_id, client_secret: config.client_secret }) }));
+  assert.equal(plainResponse.status, 200, await plainResponse.clone().text());
+  assert.match(plainResponse.headers.get("content-type") ?? "", /application\/json/);
+  const plainBody = await plainResponse.json();
+  assert.equal(plainBody.active, true);
+
+  const jwtResponse = await fetchWorker(new Request(`${jwtIntrospection.issuer}/introspect`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/token-introspection+jwt" }, body: new URLSearchParams({ token: tokens.access_token, client_id: config.client_id, client_secret: config.client_secret }) }));
+  assert.equal(jwtResponse.status, 200, await jwtResponse.clone().text());
+  assert.equal(jwtResponse.headers.get("content-type"), "application/token-introspection+jwt");
+  const jwt = await jwtResponse.text();
+  const segments = jwt.split(".");
+  assert.equal(segments.length, 3, "the response must be a compact JWS");
+  const payload = decodeJwtPayload(jwt);
+  // RFC 9701 §4: the actual introspection result travels as a "token_introspection" claim.
+  assert.equal(payload.token_introspection.active, true);
 });

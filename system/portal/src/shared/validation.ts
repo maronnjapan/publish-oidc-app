@@ -5,12 +5,14 @@ import {
   type ClientType,
   FEATURE_NAMES,
   type FeatureName,
+  MAX_CUSTOM_SCOPES,
   MAX_USERS,
   MIN_USERS,
   NAME_PATTERN,
   OPTIONAL_SCOPES,
   REQUIRED_SCOPE,
   inspectRedirectUrl,
+  isValidCustomScope,
   isValidPassword,
   isValidUsername,
   offlineAccessNeedsRefreshToken,
@@ -79,17 +81,26 @@ const clientType = z.unknown().transform((value, ctx): ClientType => {
     : reject(ctx, "client type must be either public or confidential");
 });
 
+/**
+ * Anything past `openid` and the standard optional scopes is a custom scope the publisher
+ * declared for this OP (docs/custom-scopes.md): validated against `isValidCustomScope()`
+ * and capped, rather than rejected outright the way an unrecognised value used to be.
+ */
 const scopes = z.unknown().transform((value, ctx): string[] => {
   if (!Array.isArray(value) || value[0] !== REQUIRED_SCOPE) {
     return reject(ctx, `scopes must be an array whose first entry is ${REQUIRED_SCOPE}`);
   }
   if (new Set(value).size !== value.length) return reject(ctx, "scopes must not contain duplicates");
-  const unsupported = value.find(
+  const customScopes = value.filter(
     (scope) => scope !== REQUIRED_SCOPE && !(OPTIONAL_SCOPES as readonly unknown[]).includes(scope),
   );
-  return unsupported === undefined
+  if (customScopes.length > MAX_CUSTOM_SCOPES) {
+    return reject(ctx, `at most ${MAX_CUSTOM_SCOPES} custom scopes are supported`);
+  }
+  const invalid = customScopes.find((scope) => typeof scope !== "string" || !isValidCustomScope(scope));
+  return invalid === undefined
     ? (value as string[])
-    : reject(ctx, `scope ${JSON.stringify(unsupported)} is not supported`);
+    : reject(ctx, `scope ${JSON.stringify(invalid)} is not supported`);
 });
 
 const features = z.unknown().transform((value, ctx): Record<FeatureName, boolean> => {
