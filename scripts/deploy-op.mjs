@@ -38,6 +38,7 @@ function parseRequestConfig(row, opId) {
 export const TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange";
 export const DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 export const JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-bearer";
+export const CIBA_GRANT_TYPE = "urn:openid:params:grant-type:ciba";
 
 /**
  * The generated OP authorizes a grant against the client's registered grantTypes, so an
@@ -51,6 +52,7 @@ export function clientGrantTypes(features, experimental = {}) {
   if (features["refresh-token"]) grantTypes.add("refresh_token");
   if (experimental["token-exchange"]) grantTypes.add(TOKEN_EXCHANGE_GRANT_TYPE);
   if (experimental["device-authorization-grant"]) grantTypes.add(DEVICE_CODE_GRANT_TYPE);
+  if (experimental["ciba"]) grantTypes.add(CIBA_GRANT_TYPE);
   if (experimental["id-jag"]) {
     grantTypes.add(TOKEN_EXCHANGE_GRANT_TYPE);
     grantTypes.add(JWT_BEARER_GRANT_TYPE);

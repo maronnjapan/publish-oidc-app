@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { ClientInfo, SigningKey, SigningKeyProvider, TokenClientInfo } from '@maronn-openid-connect/core';
 import { applyOidc } from './oidc-provider/apply.js';
-import { createD1DeviceAuthorizationStore, createD1ParStore, createD1ProviderStores } from './oidc-provider/persistence.js';
+import { createD1CibaAuthenticationRequestStore, createD1CibaLoginTransactionStore, createD1DeviceAuthorizationStore, createD1ParStore, createD1ProviderStores } from './oidc-provider/persistence.js';
 
 interface Env {
   DB: D1Database;
@@ -61,6 +61,8 @@ function createWorkerApp(env: Env): Hono<{ Bindings: Env; Variables: Record<stri
     // feature was not selected: the generated routes that would read it do not exist.
     c.set('parStore', createD1ParStore(env.DB, env.OP_ID));
     c.set('deviceAuthorizationStore', createD1DeviceAuthorizationStore(env.DB, env.OP_ID));
+    c.set('cibaAuthenticationRequestStore', createD1CibaAuthenticationRequestStore(env.DB, env.OP_ID));
+    c.set('cibaLoginTransactionStore', createD1CibaLoginTransactionStore(env.DB, env.OP_ID));
     c.header('X-Content-Type-Options', 'nosniff');
     c.header('Referrer-Policy', 'no-referrer');
     c.header('X-Frame-Options', 'DENY');

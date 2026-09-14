@@ -113,6 +113,15 @@ test("a public creation returns no secret and writes a hashed account to D1", as
   assert.equal(user.password_iterations, 1);
 });
 
+test("a custom scope beyond the standard six is accepted and recorded verbatim", async () => {
+  const env = environment();
+  await withDispatch(204, () =>
+    app.fetch(createRequest(createBody("public", { scopes: ["openid", "profile", "reports.read"] })), env),
+  );
+  const [request] = env.DB.rows("SELECT config_json FROM registry_requests");
+  assert.deepEqual(JSON.parse(request.config_json).scopes, ["openid", "profile", "reports.read"]);
+});
+
 test("a confidential creation returns a one-time client secret that CI can read back", async () => {
   const env = environment();
   const result = await withDispatch(204, async () => (await app.fetch(createRequest(createBody("confidential")), env)).json());
@@ -152,7 +161,8 @@ test("rejected creations report the offending field instead of a generic message
   const cases = [
     [createBody("public", { redirect_url: "http://example.com/callback" }), /redirect URL/],
     [createBody("native"), /client type/],
-    [createBody("public", { scopes: ["openid", "unknown"] }), /scope "unknown"/],
+    [createBody("public", { scopes: ["openid", "UNKNOWN"] }), /scope "UNKNOWN"/],
+    [createBody("public", { scopes: ["openid", ...Array.from({ length: 11 }, (_, i) => `custom${i}`)] }), /at most 10 custom scopes/],
     [createBody("public", { scopes: ["openid", "offline_access"], features: { ...features, "refresh-token": false } }), /offline_access/],
     [createBody("public", { users: [{ username: "たろう", password: "password-123" }] }), /user 1 username/],
     [createBody("public", { users: [{ username: "alice", password: "short" }] }), /user 1 password/],

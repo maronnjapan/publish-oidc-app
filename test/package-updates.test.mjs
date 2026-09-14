@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { compareCatalogToCli, compareVersions, experimentalFeatureIds, helpGroupHeadings, renderReport, unknownHelpHeadings } from "../scripts/check-package-updates.mjs";
+import { compareCatalogToCli, compareVersions, experimentalFeatureIds, helpGroupHeadings, renderReport, standardScopesFromHelp, unknownHelpHeadings } from "../scripts/check-package-updates.mjs";
 
 /** The three toggle groups the pinned CLI prints, in the layout check-package-updates parses. */
 const CLI_HELP = [
@@ -17,6 +17,10 @@ const CLI_HELP = [
   "",
   "Experimental features (disabled by default): par, token-exchange",
   "  Provided by the separate @maronn-openid-connect/experimental package.",
+  "",
+  "Custom scopes (none declared by default): the standard scopes (openid, profile,",
+  "  email, address, phone, offline_access) are always handled by the generated",
+  "  provider. Declare anything else with --scope.",
 ].join("\n");
 
 test("version comparison orders releases above their prereleases", () => {
@@ -56,12 +60,20 @@ test("every toggle group the help text prints is either parsed or reported as un
     "Features (all enabled by default)",
     "Optional features (disabled by default)",
     "Experimental features (disabled by default)",
+    "Custom scopes (none declared by default)",
   ]);
   assert.deepEqual(unknownHelpHeadings(CLI_HELP), []);
   // The failure this guards against: the CLI grew "Optional features" as a third group and
-  // the report said nothing, because a group nobody parses looks exactly like no group.
+  // the report said nothing, because a group nobody parses looks exactly like no group. The
+  // same thing happened again with "Custom scopes" as a fourth (docs/custom-scopes.md).
   const withNewGroup = `${CLI_HELP}\n\nHardened features (disabled by default): mtls\n`;
   assert.deepEqual(unknownHelpHeadings(withNewGroup), ["Hardened features (disabled by default)"]);
+});
+
+test("the standard scopes embedded in the Custom scopes section are read out, or null when absent", () => {
+  assert.deepEqual(standardScopesFromHelp(CLI_HELP), ["openid", "profile", "email", "address", "phone", "offline_access"]);
+  const withoutCustomScopes = CLI_HELP.split("\n\nCustom scopes")[0];
+  assert.equal(standardScopesFromHelp(withoutCustomScopes), null);
 });
 
 test("a catalog is compared against the ids the CLI says it can generate", () => {
@@ -82,6 +94,7 @@ test("the report calls out new, removed, and unwired features in both opt-in gro
     experimental: { latest: "0.1.0", published: ["par", "dpop"], added: ["dpop"], removed: ["rar"], unwired: ["dpop"], unsupportedSubpaths: [] },
     optional: { published: ["transaction-binding", "mtls"], added: ["mtls"], removed: ["retired-thing"], unwired: ["mtls"], ungeneratable: [] },
     cli: { latest: "0.1.0", features: ["pkce"], optional: ["transaction-binding"], experimental: ["par"], added: ["pkce-plus"], removed: [], ungeneratable: ["dpop"], unknownSections: ["Hardened features (disabled by default)"] },
+    customScopes: { supported: true, standardScopes: ["openid", "phone_number"], added: ["phone_number"], removed: ["phone"] },
     hasUpdates: true,
     hasCatalogWork: true,
   });
@@ -99,6 +112,11 @@ test("the report calls out new, removed, and unwired features in both opt-in gro
   assert.match(markdown, /最新CLIのoptionalトグル: `transaction-binding`/);
   assert.match(markdown, /docs\/optional-features\.md/);
   assert.match(markdown, /未知のトグル分類: `Hardened features \(disabled by default\)`/);
+
+  assert.match(markdown, /### カスタムスコープ/);
+  assert.match(markdown, /標準スコープ: `openid`, `phone_number`/);
+  assert.match(markdown, /未知の標準スコープ: `phone_number`/);
+  assert.match(markdown, /消えた標準スコープ: `phone`/);
 });
 
 test("the report says so when the optional group could not be inspected", () => {

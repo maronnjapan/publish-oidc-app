@@ -13,6 +13,7 @@ import {
   MAX_USERS,
   REQUIRED_SCOPE,
 } from "../shared/rules";
+import { parseCustomScopesText } from "../shared/custom-scopes";
 import type { CreateAppRequestBody } from "../shared/validation";
 
 /**
@@ -76,6 +77,8 @@ export interface FormState {
   clientType: ClientType;
   /** Optional scopes only; `openid` is always sent and is not a control. */
   scopes: Record<string, boolean>;
+  /** Raw text of the custom-scopes field; parseCustomScopesText() turns it into ids. */
+  customScopesText: string;
   features: Record<FeatureName, boolean>;
   optIn: Record<OptInGroup, Record<string, OptInState>>;
   users: UserDraft[];
@@ -109,6 +112,7 @@ export function initialFormState(): FormState {
     redirectUrl: "",
     clientType: ((clientTypes.find((item) => item.default) ?? clientTypes[0]).id as ClientType),
     scopes: Object.fromEntries(scopeItems.map((item) => [item.id, item.default === true])),
+    customScopesText: "",
     features: Object.fromEntries(
       FEATURE_NAMES.map((name) => [name, featureItems.find((item) => item.id === name)?.default === true]),
     ) as Record<FeatureName, boolean>,
@@ -128,6 +132,7 @@ export type FormAction =
   | { type: "set-redirect-url"; value: string }
   | { type: "set-client-type"; value: ClientType }
   | { type: "toggle-scope"; id: string; value: boolean }
+  | { type: "set-custom-scopes"; value: string }
   | { type: "toggle-feature"; id: FeatureName; value: boolean }
   | { type: "toggle-opt-in"; group: OptInGroup; id: string; value: boolean }
   | { type: "toggle-opt-in-option"; group: OptInGroup; id: string; option: string; value: boolean }
@@ -151,6 +156,8 @@ export function formReducer(state: FormState, action: FormAction): FormState {
       return { ...state, clientType: action.value };
     case "toggle-scope":
       return { ...state, scopes: { ...state.scopes, [action.id]: action.value } };
+    case "set-custom-scopes":
+      return { ...state, customScopesText: action.value };
     case "toggle-feature": {
       const features = { ...state.features, [action.id]: action.value };
       // Turning refresh tokens off takes offline_access with it: the Worker rejects the
@@ -240,7 +247,13 @@ export function selectedScopes(state: FormState): string[] {
     ...choiceItems("scope")
       .filter((item) => item.id !== REQUIRED_SCOPE && state.scopes[item.id])
       .map((item) => item.id),
+    ...customScopeIds(state),
   ];
+}
+
+/** The custom-scope ids the person typed, parsed the same way the field will send them. */
+export function customScopeIds(state: FormState): string[] {
+  return parseCustomScopesText(state.customScopesText);
 }
 
 export function selectedOptIn(state: FormState, group: OptInGroup): Record<string, Record<string, boolean>> {

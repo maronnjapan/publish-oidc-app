@@ -1,4 +1,6 @@
 import {
+  CUSTOM_SCOPE_MAX_LENGTH,
+  MAX_CUSTOM_SCOPES,
   MAX_USERS,
   NAME_MAX_LENGTH,
   NAME_PATTERN,
@@ -8,10 +10,11 @@ import {
   type RedirectUrlProblem,
   USERNAME_MAX_LENGTH,
   inspectRedirectUrl,
+  isValidCustomScope,
   isValidPassword,
   isValidUsername,
 } from "../shared/rules";
-import type { FormState } from "./form-state";
+import { customScopeIds, type FormState } from "./form-state";
 
 /**
  * The form's side of the shared rules: the same checks the Worker runs, phrased for the
@@ -25,6 +28,7 @@ export const DUPLICATE_USERNAME_HINT = "同じユーザー名は複数登録で�
 export const NAME_HINT = `表示名は${NAME_MAX_LENGTH}文字以内で、改行や制御文字を含めずに入力してください`;
 export const NO_USERS_HINT = "ログインユーザーを1件以上登録してください。";
 export const CHECK_INPUT_HINT = "入力内容を確認してください。";
+export const CUSTOM_SCOPES_HINT = `カスタムスコープは半角小文字英数字と . _ - のみ、1〜${CUSTOM_SCOPE_MAX_LENGTH}文字、カンマまたは空白区切りで${MAX_CUSTOM_SCOPES}件まで入力してください`;
 
 const REDIRECT_URL_HINTS: Record<RedirectUrlProblem, string> = {
   syntax: "URLの形式が正しくありません（例: https://example.com/callback）",
@@ -63,10 +67,19 @@ export function userErrors(state: FormState): UserErrors[] {
   });
 }
 
+/** Empty string means valid, so callers can render the result straight into the field. */
+export function customScopesError(state: FormState): string {
+  const ids = customScopeIds(state);
+  if (ids.length === 0) return "";
+  if (ids.length > MAX_CUSTOM_SCOPES) return CUSTOM_SCOPES_HINT;
+  return ids.every((id) => isValidCustomScope(id)) ? "" : CUSTOM_SCOPES_HINT;
+}
+
 export interface FormErrors {
   name: string;
   redirectUrl: string;
   users: UserErrors[];
+  customScopes: string;
   /** A whole-form problem that no single field owns. */
   form: string;
   valid: boolean;
@@ -76,8 +89,9 @@ export function formErrors(state: FormState): FormErrors {
   const name = nameError(state.name);
   const redirectUrl = state.redirectUrl.trim() === "" ? REDIRECT_URL_HINTS.syntax : redirectUrlError(state.redirectUrl);
   const users = userErrors(state);
+  const customScopes = customScopesError(state);
   const form = state.users.length < 1 ? NO_USERS_HINT : state.users.length > MAX_USERS ? CHECK_INPUT_HINT : "";
   const valid =
-    !name && !redirectUrl && !form && users.every((entry) => !entry.username && !entry.password);
-  return { name, redirectUrl, users, form, valid };
+    !name && !redirectUrl && !customScopes && !form && users.every((entry) => !entry.username && !entry.password);
+  return { name, redirectUrl, users, customScopes, form, valid };
 }

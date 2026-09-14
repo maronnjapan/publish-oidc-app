@@ -15,6 +15,8 @@
 | `jarm` | JWT Secured Authorization Response Mode | JARM | `response_mode=query.jwt` / `jwt` を指定したリクエストへの署名付きJWT応答 |
 | `device-authorization-grant` | Device Authorization Grant | RFC 8628 | `POST /device_authorization`、`/device`（GET/POST）、`POST /device/login`、`POST /device/approve` |
 | `id-jag` | ID-JAG（Cross-App Access） | draft-ietf-oauth-identity-assertion-authz-grant-04 | `/token` の `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`（requested_token_type=ID-JAG）でID-JAG発行、`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer` でID-JAG引き換え |
+| `ciba` | CIBA（Client-Initiated Backchannel Authentication） | CIBA Core 1.0 | `POST /backchannel_authentication`、`GET,POST /ciba`、`POST /ciba/login`、`POST /ciba/approve` |
+| `jwt-introspection-response` | JWT Introspection Response | RFC 9701 | なし（既存の `POST /introspect` の応答形式を条件付きで変更） |
 
 CLI（`@maronn-openid-connect/cli`）がこれらの機能を自前で生成します。このリポジトリは選択内容を `--enable <feature-id>` として渡すだけで、ルート実装やDiscoveryメタデータは書きません。
 
@@ -67,6 +69,25 @@ CLI（`@maronn-openid-connect/cli`）がこれらの機能を自前で生成し�
 - 新しい永続化は不要です。ID-JAGはaudience/issuer/exp/jtiを積んだ自己完結の署名付きJWTで、どこにも保存されません。引き換えで発行するアクセストークンは既存の `accessTokenStore` にそのまま乗ります。
 - 生成コードはRS256の署名鍵を要求します（JARM・JWKSと同じ鍵選択契約）。登録した鍵にRS256が無い場合、発行は `server_error` になります。
 
+### `ciba`
+
+- ブラウザ操作ができない消費デバイス（コールセンター端末・キオスク端末・スマートスピーカーのバックエンド等）向けの認可方式です（pollモードのみ）。消費デバイスが `POST /backchannel_authentication`（クライアント認証必須）へ `login_hint` で利用者を名指しし、`auth_req_id` を受け取ります。利用者は自分のブラウザで `GET /ciba` を開いてサインインし、保留中のリクエスト（クライアント・スコープ・`binding_message`）を確認して承認/拒否します。消費デバイスは `/token` を `grant_type=urn:openid:params:grant-type:ciba` でポーリングして結果を受け取ります。
+- Discoveryに `backchannel_authentication_endpoint` と `backchannel_token_delivery_modes_supported: ['poll']` が追加され、`grant_types_supported` に `urn:openid:params:grant-type:ciba` が加わります。
+- `/backchannel_authentication` は `/authorize` を経由しないため、公開スコープの強制はこの機能専用のパッチで行います（下表）。作成画面で選ばなかったスコープを要求すると、`auth_req_id` を発行する前に `invalid_scope` で拒否します。
+- この機能を選ぶと、クライアントの登録 `grantTypes` に `urn:openid:params:grant-type:ciba` が追加されます（`scripts/deploy-op.mjs` の `clientGrantTypes`）。追加し忘れると全てのポーリングが `unauthorized_client` になります。public クライアントは常に拒否されます（ライブラリが強制）。
+- `/ciba` のログインフォームは、Device Authorization Grantの `/device/login` と同じ理由（ログインCSRF対策）でCookieバインディングを要求します。承認/拒否 (`/ciba/approve`) はOPセッション自体に紐付くためバインディングCookieを使いません（詳しくは生成される `routes/ciba-verification.ts` 冒頭のコメントを参照）。
+- 認可コード等の同時実行対策は`auth_req_id`の使い捨て（`consume()` を `DELETE ... RETURNING` の1文で実行）で担保されます。PAR・Device Authorization Grantと同じパターンです。
+- **永続化が必要です。** 生成コードの `createInMemoryCibaAuthenticationRequestStore` / `createInMemoryCibaLoginTransactionStore`（`store.ts`）は開発用のin-memory実装なので、`templates/cloudflare/persistence.ts` の `createD1CibaAuthenticationRequestStore` / `createD1CibaLoginTransactionStore` が共有D1版を実装します。前者は `oidc_records`（`kind = 'ciba-request:'`）へ `authReqId` をキーに保存し、`listPendingBySubject()` はこの `kind` の範囲を1回のD1クエリで読んでアプリ側で絞り込みます（1利用者あたりの保留上限が `cibaConfig.maxPendingPerSubject`＝最大100件のため、この規模のテーブルでは十分です）。後者は `kind = 'ciba-login-transaction:'` へ `id` をキーに保存します。
+- `templates/cloudflare/index.ts` は両ストアをD1版で常時 `context` に積み、`EXPERIMENTAL_WIRING['ciba'].apply()` が `apply.ts` の2つの `c.set(...)` をD1版優先に書き換えます（この機能を選ばなかったOPでは生成される経路が無いため無害です）。
+
+### `jwt-introspection-response`
+
+- 既存の `POST /introspect`（Introspection機能が必要）の応答を、呼び出し元が `Accept: application/token-introspection+jwt` を指定したときだけ署名付きJWT（RS256、`application/token-introspection+jwt`）として返します。指定しない呼び出し（`Accept` なし・`application/json`・ワイルドカード）は今まで通りJSONのままです。専用エンドポイントは増えません。
+- 分岐はクライアント認証・トークン解決の**後**に置かれます（RFC 9701 §8.2 downgrade prevention）。Acceptヘッダで認証をバイパスすることはできません。
+- 応答メンバーは署名前に「認証済みの呼び出し元がこのトークンについて見てよい範囲」へ絞り込まれます（RFC 9701 §3/§5）。トークンの発行先クライアントでも `aud` に載っているクライアントでもない呼び出し元には `{ active: false }` が返り、未知のトークンと区別が付きません。
+- 署名鍵はRS256に固定です（クライアントが `introspection_signed_response_alg` を登録しなかった場合の既定）。Discoveryに `introspection_signing_alg_values_supported: ['RS256']` が追加されます。
+- CLIが自己完結で生成するため、`EXPERIMENTAL_WIRING['jwt-introspection-response']` のエントリは空の `apply()` です。**前提として `introspection` 標準機能が有効である必要があります**（CLI自身が `--disable introspection` との組み合わせをエラーにします。ポータル側での事前検証はしていません）。
+
 選択内容は生成時に `src/index.ts` の `EXPERIMENTAL_FEATURES` へ直接埋め込みます。Worker変数として渡すと、あとから消えたり書き換わったりしたときに「PAR必須」のような設定が黙って緩む（fail open）ためです。
 
 ## 生成コードへのパッチ
@@ -79,7 +100,8 @@ CLIの出力にこのリポジトリが当てる変更は次だけです。い�
 | `routes/discovery.ts` | `scopes_supported` を選択スコープに差し替え |
 | `routes/par.ts` | 同じスコープ検証をpush時にも適用 / 必須モードの反映 |
 | `routes/device-authorization.ts` | 同じスコープ検証を `/device_authorization` にも適用 |
-| `apply.ts` | context に先に入れたD1版 `parStore` / `deviceAuthorizationStore` を優先させる |
+| `routes/backchannel-authentication.ts` | 同じスコープ検証を `/backchannel_authentication` にも適用 |
+| `apply.ts` | context に先に入れたD1版 `parStore` / `deviceAuthorizationStore` / `cibaAuthenticationRequestStore` / `cibaLoginTransactionStore` を優先させる |
 | `store.ts` | CLIが開発用に仕込む `testuser` フィクスチャを両方の経路で無効化 |
 
 永続化は `templates/cloudflare/persistence.ts` が担当します。CLIが定義する `JsonStoreBackend`（get / put / delete / list）を共有D1で実装し、`createJsonProviderStores()` に渡すだけで8つのストアが揃います。ユーザーストアだけは差し替えて、平文比較ではなくポータルが書いたsalt付きSHA-256を検証します。キーは `access-token:` のようなprefixを `kind` 列（索引あり）に、残りをSHA-256にして保存するため、トークンや認可コードが復元可能な形でD1に残りません。

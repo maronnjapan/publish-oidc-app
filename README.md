@@ -16,8 +16,8 @@ OpenID ConnectやOAuthまわりで調べたことはブログに書いていま�
 ## 主な機能
 
 - Worker 1個につきOP 1個を発行し、Workerのサブドメインラベル（例: `maronn-op-abc...`）をOP IDと共有D1の名前空間キーに使用
-- 作成画面でリダイレクトURL、`openid`に加えるスコープ、`public`/`confidential`、PKCE・Refresh Token・Introspection・Revocation・Request Objectを選択
-- `@maronn-openid-connect/experimental`の試験的な機能（PAR / RFC 9126、Token Exchange / RFC 8693、JARM、Device Authorization Grant / RFC 8628）を機能単位で選択（安定していない旨を作成画面と作成完了画面に明示）
+- 作成画面でリダイレクトURL、`openid`に加えるスコープ、標準の6スコープ以外の任意のカスタムスコープ（`--scope`、[docs/custom-scopes.md](docs/custom-scopes.md)）、`public`/`confidential`、PKCE・Refresh Token・Introspection・Revocation・Request Objectを選択
+- `@maronn-openid-connect/experimental`の試験的な機能（PAR / RFC 9126、Token Exchange / RFC 8693、JARM、Device Authorization Grant / RFC 8628、ID-JAG / Cross-App Access、CIBA / CIBA Core 1.0、JWT Introspection Response / RFC 9701）を機能単位で選択（安定していない旨を作成画面と作成完了画面に明示）
 - CLI本体のオプション機能（既定で無効な安定機能。認可トランザクションのブラウザ束縛）を機能単位で選択（既定では折りたたみ表示）
 - 選択項目ごとに一行の概要を作成画面へ表示し、任意で仕様書やリポジトリ内ドキュメントへのリンクも表示（`portal-choices.json`ほかのカタログで設定）
 - 1〜5ユーザーを画面または`username,password`形式のCSVで登録
@@ -158,6 +158,9 @@ Discoveryは各OPの`/.well-known/openid-configuration`、JWKSは`/.well-known/j
 | `token-exchange` | Token Exchange | RFC 8693 | `/token`の`grant_type=urn:ietf:params:oauth:grant-type:token-exchange` |
 | `jarm` | JWT Secured Authorization Response Mode | JARM | なし（`/authorize`・`/consent`の応答を署名付きJWTに変更） |
 | `device-authorization-grant` | Device Authorization Grant | RFC 8628 | `POST /device_authorization`、`/device`ほか |
+| `id-jag` | ID-JAG（Cross-App Access） | draft-ietf-oauth-identity-assertion-authz-grant-04 | `/token`の`grant_type=urn:ietf:params:oauth:grant-type:token-exchange`（発行）・`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`（引き換え） |
+| `ciba` | CIBA（Client-Initiated Backchannel Authentication） | CIBA Core 1.0 | `POST /backchannel_authentication`、`/ciba`ほか |
+| `jwt-introspection-response` | JWT Introspection Response | RFC 9701 | なし（`POST /introspect`の応答形式を条件付きで変更） |
 
 **これらはAPIが安定しておらず、他の機能より適切に動作しない可能性が高い**ため、動作検証用途に限ってください。マイナーリリースでも破壊的変更や削除が起こり得ます。同じ注記を作成画面と作成完了画面にも表示します。
 
