@@ -5,6 +5,7 @@ import {
   choiceGroup,
   readChoiceCatalog,
   readExperimentalCatalog,
+  readExtensionCatalog,
   readOptionalCatalog,
   supportedFeatures,
   validateLinks,
@@ -29,6 +30,7 @@ const catalog = await readChoiceCatalog();
 const infra = JSON.parse(await readFile("infra.json", "utf8"));
 const experimentalCatalog = await readExperimentalCatalog();
 const optionalCatalog = await readOptionalCatalog();
+const extensionCatalog = await readExtensionCatalog();
 
 function everyItem() {
   return catalog.groups.flatMap((group) => group.items.map((item) => ({ group: group.id, item })));
@@ -43,7 +45,7 @@ test("every selectable item carries a one-line summary", () => {
   for (const { group, item } of everyItem()) {
     assert.ok(item.summary.trim().length > 0, `${group}.${item.id} has an empty summary`);
   }
-  for (const feature of [...supportedFeatures(experimentalCatalog), ...supportedFeatures(optionalCatalog)]) {
+  for (const feature of [...supportedFeatures(experimentalCatalog), ...supportedFeatures(optionalCatalog), ...supportedFeatures(extensionCatalog)]) {
     assert.ok(feature.summary.trim().length > 0, `${feature.id} has an empty summary`);
   }
 });
@@ -71,7 +73,7 @@ test("catalog ids match the lists the portal, generator and follow-up check enfo
 test("declared links resolve, and repository links point at a file that exists", async () => {
   const links = [
     ...everyItem().flatMap(({ group, item }) => (item.links ?? []).map((link) => ({ where: `${group}.${item.id}`, link }))),
-    ...[...experimentalCatalog.features, ...optionalCatalog.features].flatMap((feature) => [
+    ...[...experimentalCatalog.features, ...optionalCatalog.features, ...extensionCatalog.features].flatMap((feature) => [
       ...(feature.links ?? []).map((link) => ({ where: feature.id, link })),
       ...(feature.options ?? []).flatMap((option) => (option.links ?? []).map((link) => ({ where: `${feature.id}.${option.id}`, link }))),
     ]),
@@ -110,7 +112,7 @@ test("every declared link reaches the form", async () => {
   const html = await portalHtml();
   const declared = [
     ...everyItem().flatMap(({ item }) => item.links ?? []),
-    ...[...supportedFeatures(experimentalCatalog), ...supportedFeatures(optionalCatalog)].flatMap((feature) => [
+    ...[...supportedFeatures(experimentalCatalog), ...supportedFeatures(optionalCatalog), ...supportedFeatures(extensionCatalog)].flatMap((feature) => [
       ...(feature.links ?? []),
       ...(feature.options ?? []).flatMap((option) => option.links ?? []),
     ]),

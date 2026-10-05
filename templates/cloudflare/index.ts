@@ -31,6 +31,14 @@ const EXPERIMENTAL_FEATURES: Record<string, Record<string, unknown>> = {};
  */
 const OPTIONAL_FEATURES: Record<string, Record<string, unknown>> = {};
 
+/**
+ * Enabled extension features of @maronn-openid-connect/cli (see extension-features.json),
+ * with the values the publisher typed in (google-login's OAuth client ID). Written at
+ * generation time like the two groups above; scripts/generate-op.mjs also wires the
+ * runtime pieces an extension needs into createWorkerApp (EXTENSION_WIRING).
+ */
+const EXTENSION_FEATURES: Record<string, Record<string, unknown>> = {};
+
 let cachedSigningKey: Promise<SigningKey> | undefined;
 
 function signingKeyProvider(jwkText: string): SigningKeyProvider {
@@ -85,6 +93,7 @@ function createWorkerApp(env: Env): Hono<{ Bindings: Env; Variables: Record<stri
     client_type: client.clientType,
     scopes_supported: scopes,
     optional_features: Object.keys(OPTIONAL_FEATURES),
+    extension_features: Object.keys(EXTENSION_FEATURES),
     experimental_features: Object.keys(EXPERIMENTAL_FEATURES),
     discovery: env.OP_ISSUER + '/.well-known/openid-configuration',
   }));

@@ -71,7 +71,7 @@ test("every selectable item is rendered with the summary its catalog gives it", 
       assert.ok(html.includes(item.label), `${group.id}.${item.id} label is missing from the form`);
     }
   }
-  for (const feature of [...catalog.OPTIONAL_FEATURES, ...catalog.EXPERIMENTAL_FEATURES]) {
+  for (const feature of [...catalog.OPTIONAL_FEATURES, ...catalog.EXPERIMENTAL_FEATURES, ...catalog.EXTENSION_FEATURES]) {
     assert.ok(html.includes(feature.summary), `${feature.id} summary is missing from the form`);
     for (const option of feature.options ?? []) {
       assert.ok(html.includes(`data-feature="${feature.id}" data-option="${option.id}"`), `${feature.id}.${option.id}`);
@@ -110,11 +110,29 @@ test("the optional section is folded away and does not borrow the experimental w
   assert.doesNotMatch(section, /他の機能より適切に動作しない/);
 });
 
+test("the extension section is folded away, asks for the client ID, and does not borrow the experimental warning", () => {
+  for (const feature of catalog.EXTENSION_FEATURES) {
+    assert.match(html, new RegExp(`class="extension-toggle-input" type="checkbox" value="${feature.id}"`));
+  }
+  assert.match(html, /<details class="optional extension">/);
+  assert.doesNotMatch(html, /<details class="optional extension" open>/);
+  assert.match(html, /<summary>拡張機能（デフォルト無効/);
+  // The client ID is a text field, not a checkbox, and stays off until its feature is ticked.
+  assert.match(html, /id="extension-google-login-clientId"/);
+  assert.match(html, /class="extension-option-text"[^>]*data-feature="google-login" data-option="clientId"/);
+  const start = html.indexOf('<details class="optional extension">');
+  const section = html.slice(start, html.indexOf("</details>", start));
+  assert.doesNotMatch(section, /他の機能より適切に動作しない/);
+  // The optional section keeps its own framing: the extension must not have replaced it.
+  assert.match(html, /<details class="optional">/);
+});
+
 test("a feature that is not wired into the generator is never offered", async () => {
-  const { readExperimentalCatalog, readOptionalCatalog } = await import("../scripts/lib.mjs");
+  const { readExperimentalCatalog, readExtensionCatalog, readOptionalCatalog } = await import("../scripts/lib.mjs");
   for (const [group, file] of [
     ["experimental", await readExperimentalCatalog()],
     ["optional", await readOptionalCatalog()],
+    ["extension", await readExtensionCatalog()],
   ]) {
     for (const feature of file.features.filter((entry) => entry.status !== "supported")) {
       assert.doesNotMatch(html, new RegExp(`class="${group}-toggle-input" type="checkbox" value="${feature.id}"`));
@@ -123,7 +141,7 @@ test("a feature that is not wired into the generator is never offered", async ()
 });
 
 test("opt-in options start disabled, because their feature starts off", () => {
-  for (const feature of [...catalog.OPTIONAL_FEATURES, ...catalog.EXPERIMENTAL_FEATURES]) {
+  for (const feature of [...catalog.OPTIONAL_FEATURES, ...catalog.EXPERIMENTAL_FEATURES, ...catalog.EXTENSION_FEATURES]) {
     for (const option of feature.options ?? []) {
       const marker = `data-feature="${feature.id}" data-option="${option.id}"`;
       const row = html.slice(html.indexOf(marker), html.indexOf(marker) + 200);

@@ -2,7 +2,7 @@
 
 `@maronn-openid-connect/experimental` は、まだ `@maronn-openid-connect/core` へ昇格していない仕様を先行実装したpackageです。このリポジトリではポータルの「試験的な機能」セクションから機能単位で選択でき、選んだOPにだけ生成されます。
 
-> CLIの機能トグルは3分類あります。既定で有効な標準機能、既定で無効だが安定している**オプション機能**（[docs/optional-features.md](optional-features.md)）、そしてこのドキュメントが扱う試験的な機能です。分類ごとにカタログと配線手順が分かれています。
+> CLIの機能トグルは4分類あります。既定で有効な標準機能、既定で無効だが安定している**オプション機能**（[docs/optional-features.md](optional-features.md)）と**拡張機能**（[docs/extension-features.md](extension-features.md)）、そしてこのドキュメントが扱う試験的な機能です。分類ごとにカタログと配線手順が分かれています。
 
 > **注意:** experimentalのAPIは安定していません。マイナーリリースでも破壊的変更や削除が起こり得るため、**他の機能より適切に動作しない可能性が高い**前提で使ってください。本番用途には向きません。ポータルの作成画面と作成完了画面にも同じ注記を表示しています。
 
@@ -17,6 +17,7 @@
 | `id-jag` | ID-JAG（Cross-App Access） | draft-ietf-oauth-identity-assertion-authz-grant-04 | `/token` の `grant_type=urn:ietf:params:oauth:grant-type:token-exchange`（requested_token_type=ID-JAG）でID-JAG発行、`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer` でID-JAG引き換え |
 | `ciba` | CIBA（Client-Initiated Backchannel Authentication） | CIBA Core 1.0 | `POST /backchannel_authentication`、`GET,POST /ciba`、`POST /ciba/login`、`POST /ciba/approve` |
 | `jwt-introspection-response` | JWT Introspection Response | RFC 9701 | なし（既存の `POST /introspect` の応答形式を条件付きで変更） |
+| `rp-initiated-logout` | RP-Initiated Logout | OIDC RP-Initiated Logout 1.0 | `GET`/`POST /logout`、`POST /logout/approve`、Discoveryの `end_session_endpoint` |
 
 CLI（`@maronn-openid-connect/cli`）がこれらの機能を自前で生成します。このリポジトリは選択内容を `--enable <feature-id>` として渡すだけで、ルート実装やDiscoveryメタデータは書きません。
 
@@ -88,6 +89,15 @@ CLI（`@maronn-openid-connect/cli`）がこれらの機能を自前で生成し�
 - 署名鍵はRS256に固定です（クライアントが `introspection_signed_response_alg` を登録しなかった場合の既定）。Discoveryに `introspection_signing_alg_values_supported: ['RS256']` が追加されます。
 - CLIが自己完結で生成するため、`EXPERIMENTAL_WIRING['jwt-introspection-response']` のエントリは空の `apply()` です。**前提として `introspection` 標準機能が有効である必要があります**（CLI自身が `--disable introspection` との組み合わせをエラーにします。ポータル側での事前検証はしていません）。
 
+### `rp-initiated-logout`
+
+- RPが利用者を `/logout`（GET・POST）へ送ると、OPは確認画面を出し、利用者が承認（`POST /logout/approve`）したときだけOPのブラウザセッションを終了します。確認なしでセッションを消すとCSRFでログアウトさせられるため、確認は省けません。
+- 確認画面は、HttpOnly Cookie（`oidc_logout_confirm`）とフォームの隠し `csrf_token` が両方そろって一致したときだけ承認を受け付けます。どちらか片方では何も削除されません。
+- 画面の文言は、`id_token_hint` の有無や正否、セッションの有無によらず固定です（セッションの存在を探るオラクルにならないようにするためです）。
+- Discoveryに `end_session_endpoint` が追加されます。
+- 生成コードの `rpInitiatedLogoutConfig.postLogoutRedirectUris` は**空のまま**です（fail safe）。ログアウトは常にOP自身の「ログアウトしました」画面で終わり、`post_logout_redirect_uri` へはリダイレクトしません。RPへ戻したい場合は、生成されたOPの `routes/logout.ts` を手で編集してください（ポータルからは指定できません）。
+- 新しい永続化は不要です。終了させるのは既存のブラウザセッションレコードで、共有D1のストアがそのまま扱います。CLIが自己完結で生成するため、`EXPERIMENTAL_WIRING['rp-initiated-logout']` のエントリは空の `apply()` です。
+
 選択内容は生成時に `src/index.ts` の `EXPERIMENTAL_FEATURES` へ直接埋め込みます。Worker変数として渡すと、あとから消えたり書き換わったりしたときに「PAR必須」のような設定が黙って緩む（fail open）ためです。
 
 ## 生成コードへのパッチ
@@ -124,7 +134,7 @@ npm run check             # 更新後に必ず実行
 4. 最新CLIの `--help` が出力する機能トグル一覧（通常・optional・experimental）と、このリポジトリが知っているトグルの差
 5. `--help` にこのリポジトリが解釈していない見出しが増えていないか（`HELP_SECTIONS` / `unknownHelpHeadings()`）
 
-5点目は、CLIが3つ目の分類「Optional features」を追加したときにレポートが何も言わなかったことへの対策です。読んでいない分類は「分類が無い」のと区別が付かないため、見出しそのものを照合します。
+5点目は、CLIが3つ目の分類「Optional features」を追加したときにレポートが何も言わなかったことへの対策です（4つ目の「Extension features」もこれで検出できました）。読んでいない分類は「分類が無い」のと区別が付かないため、見出しそのものを照合します。
 
 自動実行は2系統あります。
 

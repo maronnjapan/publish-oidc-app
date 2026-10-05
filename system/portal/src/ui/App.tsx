@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useState } from "preact/hooks";
-import { EXPERIMENTAL_FEATURES, OPTIONAL_FEATURES, choiceItems } from "../shared/catalog";
+import { EXPERIMENTAL_FEATURES, EXTENSION_FEATURES, OPTIONAL_FEATURES, choiceItems } from "../shared/catalog";
 import { CUSTOM_SCOPE_MAX_LENGTH, type FeatureName, MAX_CUSTOM_SCOPES, REQUIRED_SCOPE } from "../shared/rules";
 import { formReducer, initialFormState, scopeDisabled } from "./form-state";
 import { type PortalApi, browserApi } from "./api";
@@ -105,7 +105,7 @@ export function App({ api = browserApi, clock }: { api?: PortalApi; clock?: Cloc
             <Hint>publicクライアントはライブラリの安全ポリシーにより、PKCE設定をオフにしてもPKCEが必須です。</Hint>
           </ChoiceCard>
 
-          <OptInCard group="optional" features={OPTIONAL_FEATURES} state={state} dispatch={dispatch}>
+          <OptInCard group="optional" features={OPTIONAL_FEATURES} state={state} errors={errors} dispatch={dispatch}>
             {(toggles) => (
               <details class="optional">
                 <summary>オプション機能（デフォルト無効・{OPTIONAL_FEATURES.length}件）</summary>
@@ -117,7 +117,19 @@ export function App({ api = browserApi, clock }: { api?: PortalApi; clock?: Cloc
             )}
           </OptInCard>
 
-          <OptInCard group="experimental" features={EXPERIMENTAL_FEATURES} state={state} dispatch={dispatch}>
+          <OptInCard group="extension" features={EXTENSION_FEATURES} state={state} errors={errors} dispatch={dispatch}>
+            {(toggles) => (
+              <details class="optional extension">
+                <summary>拡張機能（デフォルト無効・{EXTENSION_FEATURES.length}件）</summary>
+                <Hint>
+                  外部サービスとの連携です。CLIが標準で持つ安定した機能なので試験的な機能とは別枠ですが、連携先での設定（クライアントIDの発行やリダイレクトURIの登録）が要るため既定では無効です。必要なときだけ有効にしてください。
+                </Hint>
+                {toggles}
+              </details>
+            )}
+          </OptInCard>
+
+          <OptInCard group="experimental" features={EXPERIMENTAL_FEATURES} state={state} errors={errors} dispatch={dispatch}>
             {(toggles) => (
               <fieldset>
                 <legend>試験的な機能（@maronn-openid-connect/experimental）</legend>

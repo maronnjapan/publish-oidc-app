@@ -51,6 +51,7 @@ const device = await buildWorker("maronn-op-device1234567", { "device-authorizat
 const idJag = await buildWorker("maronn-op-idjag12345678", { "id-jag": {} });
 const ciba = await buildWorker("maronn-op-ciba12345678", { ciba: {} });
 const jwtIntrospection = await buildWorker("maronn-op-jwtintro123", { "jwt-introspection-response": {} });
+const logout = await buildWorker("maronn-op-logout1234567", { "rp-initiated-logout": {} });
 
 /** Decodes a JWT's payload without verifying the signature (RS256 signing is CLI/package-owned and covered by its own conformance suite; this repository's wiring is what these tests exercise). */
 function decodeJwtPayload(jwt) {
@@ -95,7 +96,7 @@ async function completeLogin(fetchWorker, issuer, location) {
 test("the catalog only advertises features the CLI and the generator both know", async () => {
   const catalog = await readExperimentalCatalog();
   const supported = supportedFeatures(catalog);
-  assert.deepEqual(supported.map((feature) => feature.id).sort(), ["ciba", "device-authorization-grant", "id-jag", "jarm", "jwt-introspection-response", "par", "token-exchange"]);
+  assert.deepEqual(supported.map((feature) => feature.id).sort(), ["ciba", "device-authorization-grant", "id-jag", "jarm", "jwt-introspection-response", "par", "rp-initiated-logout", "token-exchange"]);
   const cliHelp = await readFile("node_modules/@maronn-openid-connect/cli/dist/features.js", "utf8");
   for (const feature of supported) {
     assert.match(feature.subpath, /^@maronn-openid-connect\/experimental\//);
@@ -638,4 +639,28 @@ test("jwt-introspection-response: a caller that asks for the JWT media type gets
   const payload = decodeJwtPayload(jwt);
   // RFC 9701 §4: the actual introspection result travels as a "token_introspection" claim.
   assert.equal(payload.token_introspection.active, true);
+});
+
+test("rp-initiated-logout: discovery advertises end_session_endpoint only when enabled", async () => {
+  const metadata = await (await (await logout.client()).fetch(new Request(`${logout.issuer}/.well-known/openid-configuration`))).json();
+  assert.equal(metadata.end_session_endpoint, `${logout.issuer}/logout`);
+
+  const { fetch: plainFetch } = await device.client();
+  const plainMetadata = await (await plainFetch(new Request(`${device.issuer}/.well-known/openid-configuration`))).json();
+  assert.equal("end_session_endpoint" in plainMetadata, false);
+});
+
+test("rp-initiated-logout: a logout request shows a confirmation, and approving without the paired cookie ends nothing", async () => {
+  const { fetch: fetchWorker } = await logout.client();
+  const confirmation = await fetchWorker(new Request(`${logout.issuer}/logout?client_id=${config.client_id}`));
+  assert.equal(confirmation.status, 200);
+  assert.match(confirmation.headers.get("set-cookie") ?? "", /oidc_logout_confirm=/);
+  const csrfToken = (await confirmation.text()).match(/name="csrf_token" value="([^"]+)"/)?.[1];
+  assert.ok(csrfToken, "the confirmation form must carry a csrf_token");
+
+  // The form value alone is never accepted: the HttpOnly cookie has to come back with it, so
+  // a forged cross-site POST fails. An allow list is empty by default, so there is no redirect.
+  const forged = await fetchWorker(new Request(`${logout.issuer}/logout/approve`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ csrf_token: csrfToken }) }));
+  assert.equal(forged.status, 400);
+  assert.equal(forged.headers.get("location"), null);
 });

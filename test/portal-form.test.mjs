@@ -210,6 +210,28 @@ test("the request body the form builds is one the Worker accepts", () => {
   assert.deepEqual(parsed.value.optional, { "transaction-binding": {} });
 });
 
+test("a text option is required once its feature is on, and is sent trimmed", () => {
+  const clientId = "1234567890-abc.apps.googleusercontent.com";
+  const feature = (value) => ({ type: "toggle-opt-in-option", group: "extension", id: "google-login", option: "clientId", value });
+
+  // Unticked, the empty field is not an error and the feature is absent from the request.
+  assert.equal(validation.formErrors(filledState()).valid, true);
+  assert.deepEqual(state.toRequestBody(filledState()).extension, {});
+
+  const enabled = reduce(filledState(), { type: "toggle-opt-in", group: "extension", id: "google-login", value: true });
+  const key = validation.optInErrorKey("extension", "google-login", "clientId");
+  assert.equal(validation.formErrors(enabled).valid, false);
+  assert.match(validation.formErrors(enabled).optIn[key], /入力してください/);
+  assert.match(validation.formErrors(reduce(enabled, feature("nope"))).optIn[key], /形式が正しくありません/);
+
+  const filled = reduce(enabled, feature(`  ${clientId}\n`));
+  assert.equal(validation.formErrors(filled).valid, true);
+  assert.deepEqual(state.selectedOptIn(filled, "extension"), { "google-login": { clientId, requireVerifiedEmail: false } });
+  const parsed = shared.parseCreateApp(state.toRequestBody(filled));
+  assert.equal(parsed.ok, true, parsed.message);
+  assert.deepEqual(parsed.value.extension, { "google-login": { clientId, requireVerifiedEmail: false } });
+});
+
 test("field errors name the field, and a valid form reports none", () => {
   const errors = validation.formErrors(state.initialFormState());
   assert.equal(errors.valid, false);

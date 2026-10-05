@@ -190,6 +190,33 @@
         "introspection_signing_alg_values_supported"
       ],
       "options": []
+    },
+    {
+      "id": "rp-initiated-logout",
+      "status": "supported",
+      "subpath": "@maronn-openid-connect/experimental/rp-initiated-logout",
+      "label": "RP-Initiated Logout",
+      "spec": "OIDC RP-Initiated Logout 1.0",
+      "summary": "RPが /logout へ利用者を送ると、確認画面を経てOPのセッションを終了します。確認なしのログアウトはCSRF対策として行いません。",
+      "links": [
+        {
+          "label": "OIDC RP-Initiated Logout 1.0",
+          "url": "https://openid.net/specs/openid-connect-rpinitiated-1_0.html"
+        },
+        {
+          "label": "このリポジトリでの実装メモ",
+          "doc": "docs/experimental.md"
+        }
+      ],
+      "endpoints": [
+        "GET /logout",
+        "POST /logout",
+        "POST /logout/approve"
+      ],
+      "discovery": [
+        "end_session_endpoint"
+      ],
+      "options": []
     }
   ]
 }

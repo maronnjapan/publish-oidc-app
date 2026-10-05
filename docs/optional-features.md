@@ -1,15 +1,16 @@
 # オプション機能（CLI本体・デフォルト無効）
 
-`@maronn-openid-connect/cli` の機能トグルは3分類＋1つの自由入力があります。
+`@maronn-openid-connect/cli` の機能トグルは4分類＋1つの自由入力があります。
 
 | 分類 | `--help` の見出し | 既定 | 実装元 | カタログ |
 |---|---|---|---|---|
 | 標準機能 | `Features (all enabled by default):` | 有効 | CLI | ID一覧は `FEATURE_NAMES` / `FEATURES` に直接列挙。説明とリンクだけ `portal-choices.json`（[docs/choices.md](choices.md)） |
 | **オプション機能** | `Optional features (disabled by default):` | 無効 | CLI | `optional-features.json` |
 | 試験的な機能 | `Experimental features (disabled by default):` | 無効 | `@maronn-openid-connect/experimental` | `experimental-features.json` |
+| 拡張機能 | `Extension features (disabled by default):` | 無効 | CLI＋機能ごとの別package | `extension-features.json`（[docs/extension-features.md](extension-features.md)） |
 | カスタムスコープ | `Custom scopes (none declared by default):` | 無効 | CLI（`--scope`） | カタログなし（アプリごとの自由入力、[docs/custom-scopes.md](custom-scopes.md)） |
 
-このドキュメントは2番目の**オプション機能**を扱います。試験的な機能は [docs/experimental.md](experimental.md)、カスタムスコープは [docs/custom-scopes.md](custom-scopes.md) を参照してください。カスタムスコープは「feature-idを1つ有効にする」形の分類ではなく（`--enable` ではなく `--scope` という別のCLIオプションで、値も固定IDの集合ではなく自由文字列です）、`detected`/`supported` のカタログを持てないため、下の手順とは別に配線しています。
+このドキュメントは**オプション機能**を扱います。試験的な機能は [docs/experimental.md](experimental.md)、拡張機能は [docs/extension-features.md](extension-features.md)、カスタムスコープは [docs/custom-scopes.md](custom-scopes.md) を参照してください。カスタムスコープは「feature-idを1つ有効にする」形の分類ではなく（`--enable` ではなく `--scope` という別のCLIオプションで、値も固定IDの集合ではなく自由文字列です）、`detected`/`supported` のカタログを持てないため、下の手順とは別に配線しています。
 
 ## experimental との違い
 
@@ -68,7 +69,7 @@ CLIの `--enable` がそのIDを受け付けない場合はCLIの更新待ちで
 
 `scripts/check-package-updates.mjs` の `HELP_SECTIONS` が `--help` の見出しを解釈し、`unknownHelpHeadings()` がどのパターンにも当てはまらない見出しを拾います。未知の見出しはレポートの「未知のトグル分類」として報告され、`test/optional.test.mjs` が固定CLIに対して同じ検査を行うのでCIでも落ちます。
 
-この仕組みは一度実際に発動しています。CLIが4つ目の見出し `Custom scopes (none declared by default):` を追加したときにレポートがそれを拾い、[docs/custom-scopes.md](custom-scopes.md) の配線につながりました。ただしCustom scopesは「`--enable <feature-id>` で選ぶ固定IDの集合」という他の3分類の形に当てはまらなかった（`--scope` という別オプションで、値はアプリごとの自由文字列）ため、下の手順3・4はそのままでは使えず、カタログを持たない専用の配線になっています。新しい見出しが現れたら、まず**それが固定IDの集合（`--enable` に乗る形）かどうか**を確認し、そうであれば下の手順、そうでなければCustom scopesを前例として個別に設計してください。
+この仕組みは一度実際に発動しています。CLIが4つ目の見出し `Custom scopes (none declared by default):` を追加したときにレポートがそれを拾い、[docs/custom-scopes.md](custom-scopes.md) の配線につながりました。その後、5つ目の見出し `Extension features (disabled by default):` が現れたときもレポートの「未知のトグル分類」が拾い、こちらは「`--enable <feature-id>` で選ぶ固定IDの集合」だったので下の手順どおり `extension-features.json`・`readExtensionCatalog()`・レポートの節・`EXTENSION_WIRING`・ポータルの `<details>` を足しました（[docs/extension-features.md](extension-features.md)）。拡張機能が既存の3分類に付け足したのは、入力欄（option の `type: "text"`）、機能ごとの別package、エントリポイントへの差し込み（`entrypoint`）だけで、`OptInCard` と `parseFeatureSelection()` は共有のままです。ただしCustom scopesは「`--enable <feature-id>` で選ぶ固定IDの集合」という他の分類の形に当てはまらなかった（`--scope` という別オプションで、値はアプリごとの自由文字列）ため、下の手順3・4はそのままでは使えず、カタログを持たない専用の配線になっています。新しい見出しが現れたら、まず**それが固定IDの集合（`--enable` に乗る形）かどうか**を確認し、そうであれば下の手順、そうでなければCustom scopesを前例として個別に設計してください。
 
 固定IDの集合である新しい分類が増えたときは次を行ってください。
 

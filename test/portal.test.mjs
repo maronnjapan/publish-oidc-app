@@ -310,6 +310,31 @@ test("opt-in selections are validated against their catalogs and reach the deplo
   assert.deepEqual(config.optional, { "transaction-binding": {} });
 });
 
+test("an extension selection carries its client ID to the deployment config, and is validated like the other groups", async () => {
+  const clientId = "1234567890-abc.apps.googleusercontent.com";
+  const env = environment();
+  await withDispatch(204, async () => {
+    const response = await app.fetch(createRequest(createBody("public", { extension: { "google-login": { clientId } } })), env);
+    assert.equal(response.status, 202);
+  });
+  const config = JSON.parse(env.DB.rows("SELECT config_json FROM registry_requests")[0].config_json);
+  assert.deepEqual(config.extension, { "google-login": { clientId, requireVerifiedEmail: false } });
+
+  const cases = [
+    [{ extension: { "google-login": {} } }, /extension option "google-login\.clientId" is required/],
+    [{ extension: { "google-login": { clientId: "not-a-client-id" } } }, /does not look like a valid/],
+    [{ extension: { "google-login": { clientId: 7 } } }, /must be a string/],
+    [{ extension: { "google-login": { clientId, requireVerifiedEmail: "yes" } } }, /must be true or false/],
+    [{ extension: { par: {} } }, /extension feature "par"/],
+    [{ optional: { "google-login": { clientId } } }, /optional feature "google-login"/],
+  ];
+  for (const [overrides, expected] of cases) {
+    const response = await app.fetch(createRequest(createBody("public", overrides)), environment());
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).message, expected);
+  }
+});
+
 test("an id may not cross between the optional and experimental groups", async () => {
   const cases = [
     [{ optional: { par: {} } }, /optional feature "par"/],

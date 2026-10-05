@@ -28,7 +28,8 @@ import {
  * order a person would read the form.
  */
 
-export type FeatureSelection = Record<string, Record<string, boolean>>;
+/** Checkbox options are booleans; a `type: "text"` option (google-login's client ID) is a string. */
+export type FeatureSelection = Record<string, Record<string, boolean | string>>;
 
 export interface PortalUser {
   username: string;
@@ -43,6 +44,7 @@ export interface CreateAppInput {
   features: Record<FeatureName, boolean>;
   optional: FeatureSelection;
   experimental: FeatureSelection;
+  extension: FeatureSelection;
   users: PortalUser[];
 }
 
@@ -132,18 +134,27 @@ function featureSelection(group: OptInGroup) {
         return reject(ctx, `${group} feature ${JSON.stringify(id)} options must be an object`);
       }
       const declared = feature.options ?? [];
-      const options: Record<string, boolean> = {};
+      const options: Record<string, boolean | string> = {};
       for (const [optionId, optionValue] of Object.entries(rawOptions)) {
         const where = JSON.stringify(`${id}.${optionId}`);
-        if (!declared.some((item) => item.id === optionId)) {
-          return reject(ctx, `${group} option ${where} is not supported`);
-        }
-        if (typeof optionValue !== "boolean") {
+        const option = declared.find((item) => item.id === optionId);
+        if (!option) return reject(ctx, `${group} option ${where} is not supported`);
+        if (option.type === "text") {
+          if (typeof optionValue !== "string") return reject(ctx, `${group} option ${where} must be a string`);
+          if (!new RegExp(option.pattern ?? "").test(optionValue)) {
+            return reject(ctx, `${group} option ${where} does not look like a valid ${option.label}`);
+          }
+        } else if (typeof optionValue !== "boolean") {
           return reject(ctx, `${group} option ${where} must be true or false`);
         }
         options[optionId] = optionValue;
       }
-      for (const option of declared) if (!(option.id in options)) options[option.id] = option.default === true;
+      for (const option of declared) {
+        if (option.id in options) continue;
+        // A text option has no default: the feature cannot work without it.
+        if (option.type === "text") return reject(ctx, `${group} option ${JSON.stringify(`${id}.${option.id}`)} is required`);
+        options[option.id] = option.default === true;
+      }
       selection[id] = options;
     }
     return selection;
@@ -186,6 +197,7 @@ const body = z
     features,
     optional: featureSelection("optional"),
     experimental: featureSelection("experimental"),
+    extension: featureSelection("extension"),
     users,
   })
   .superRefine((value, ctx) => {
@@ -202,6 +214,7 @@ const body = z
       features: value.features,
       optional: value.optional,
       experimental: value.experimental,
+      extension: value.extension,
       users: value.users,
     }),
   );
@@ -224,6 +237,7 @@ export const createAppRequestSchema = z
       features: value.features,
       optional: value.optional,
       experimental: value.experimental,
+      extension: value.extension,
       users: value.users,
     };
   })

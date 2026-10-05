@@ -37,7 +37,10 @@ export async function readInfra() {
 
 export const EXPERIMENTAL_CATALOG_PATH = path.join(ROOT, "experimental-features.json");
 export const OPTIONAL_CATALOG_PATH = path.join(ROOT, "optional-features.json");
+export const EXTENSION_CATALOG_PATH = path.join(ROOT, "extension-features.json");
 export const CHOICE_CATALOG_PATH = path.join(ROOT, "portal-choices.json");
+
+const GOOGLE_AUTH_LIBRARY_STUB = path.join(ROOT, "templates", "cloudflare", "google-auth-library-stub.mjs");
 
 export const FEATURE_ID_PATTERN = /^[a-z][a-z0-9-]{0,30}$/;
 
@@ -106,11 +109,11 @@ export function choiceGroup(catalog, groupId) {
 }
 
 /**
- * The CLI ships feature toggles in three groups, and this repository follows all three:
- * the default set (always generated unless disabled), CLI-native optional features, and
- * the experimental features that live in a separate package. The two opt-in groups get a
- * catalog file each, with the same shape, so adding a group member is data plus wiring
- * rather than a new code path.
+ * The CLI ships feature toggles in four groups, and this repository follows all four:
+ * the default set (always generated unless disabled), CLI-native optional features, the
+ * experimental features that live in a separate package, and extension features. The three
+ * opt-in groups get a catalog file each, with the same shape, so adding a group member is
+ * data plus wiring rather than a new code path.
  */
 async function readFeatureCatalog(catalogPath, kind) {
   const fileName = path.basename(catalogPath);
@@ -131,6 +134,13 @@ async function readFeatureCatalog(catalogPath, kind) {
     validateLinks(feature.links, `${kind} feature ${feature.id}`);
     for (const option of feature.options ?? []) {
       validateLinks(option.links, `${kind} option ${feature.id}.${option?.id}`);
+      // Options are checkboxes unless they say `type: "text"`, which needs a pattern the
+      // value must match (the portal and the generator both enforce it).
+      if (option.type !== undefined && option.type !== "text") throw new Error(`${kind} option ${feature.id}.${option?.id} has an unknown type`);
+      if (option.type === "text") {
+        if (typeof option.pattern !== "string") throw new Error(`${kind} text option ${feature.id}.${option?.id} needs a pattern`);
+        new RegExp(option.pattern);
+      }
     }
   }
   return catalog;
@@ -144,6 +154,14 @@ export async function readExperimentalCatalog() {
 /** Single source of truth for the CLI's own opt-in features (see docs/optional-features.md). */
 export async function readOptionalCatalog() {
   return readFeatureCatalog(OPTIONAL_CATALOG_PATH, "optional");
+}
+
+/**
+ * Single source of truth for the CLI's "Extension features" (see docs/extension-features.md):
+ * opt-in integrations the CLI generates but that each pull in a package of their own.
+ */
+export async function readExtensionCatalog() {
+  return readFeatureCatalog(EXTENSION_CATALOG_PATH, "extension");
 }
 
 /** Features that are wired into the generator, i.e. the ones the portal may offer. */
@@ -200,6 +218,9 @@ export function getD1Rows(result) {
 
 export async function bundle(entryPoint, options = {}) {
   const output = await build({
+    // google-auth-library cannot load on Workers (see the stub); only the google-login
+    // extension imports it, and it never reaches it at runtime.
+    alias: { "google-auth-library": GOOGLE_AUTH_LIBRARY_STUB },
     entryPoints: [entryPoint],
     bundle: true,
     write: false,

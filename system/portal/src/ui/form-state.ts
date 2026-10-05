@@ -2,6 +2,7 @@ import {
   type CatalogFeature,
   type OptInGroup,
   EXPERIMENTAL_FEATURES,
+  EXTENSION_FEATURES,
   OPTIONAL_FEATURES,
   choiceItems,
 } from "../shared/catalog";
@@ -34,7 +35,8 @@ export interface UserDraft {
 
 export interface OptInState {
   enabled: boolean;
-  options: Record<string, boolean>;
+  /** Checkbox options hold booleans; a text option holds what has been typed so far. */
+  options: Record<string, boolean | string>;
 }
 
 export interface CsvPreview {
@@ -51,6 +53,8 @@ export interface Credentials {
 export interface EnabledSummary {
   optional: string[];
   experimental: { label: string; endpoints: string }[];
+  /** What to do outside this portal once the OP exists, e.g. registering a redirect URI. */
+  extension: { label: string; afterCreate: string }[];
 }
 
 /**
@@ -97,7 +101,7 @@ function initialOptIn(features: CatalogFeature[]): Record<string, OptInState> {
       feature.id,
       {
         enabled: false,
-        options: Object.fromEntries((feature.options ?? []).map((option) => [option.id, option.default === true])),
+        options: Object.fromEntries((feature.options ?? []).map((option) => [option.id, option.type === "text" ? "" : option.default === true])),
       },
     ]),
   );
@@ -116,7 +120,11 @@ export function initialFormState(): FormState {
     features: Object.fromEntries(
       FEATURE_NAMES.map((name) => [name, featureItems.find((item) => item.id === name)?.default === true]),
     ) as Record<FeatureName, boolean>,
-    optIn: { optional: initialOptIn(OPTIONAL_FEATURES), experimental: initialOptIn(EXPERIMENTAL_FEATURES) },
+    optIn: {
+      optional: initialOptIn(OPTIONAL_FEATURES),
+      experimental: initialOptIn(EXPERIMENTAL_FEATURES),
+      extension: initialOptIn(EXTENSION_FEATURES),
+    },
     users: [{ id: 1, username: "", password: "" }],
     nextUserId: 2,
     csv: null,
@@ -135,7 +143,7 @@ export type FormAction =
   | { type: "set-custom-scopes"; value: string }
   | { type: "toggle-feature"; id: FeatureName; value: boolean }
   | { type: "toggle-opt-in"; group: OptInGroup; id: string; value: boolean }
-  | { type: "toggle-opt-in-option"; group: OptInGroup; id: string; option: string; value: boolean }
+  | { type: "toggle-opt-in-option"; group: OptInGroup; id: string; option: string; value: boolean | string }
   | { type: "add-user" }
   | { type: "remove-user"; id: number }
   | { type: "set-user"; id: number; field: "username" | "password"; value: string }
@@ -256,11 +264,15 @@ export function customScopeIds(state: FormState): string[] {
   return parseCustomScopesText(state.customScopesText);
 }
 
-export function selectedOptIn(state: FormState, group: OptInGroup): Record<string, Record<string, boolean>> {
+export function selectedOptIn(state: FormState, group: OptInGroup): Record<string, Record<string, boolean | string>> {
   return Object.fromEntries(
     Object.entries(state.optIn[group])
       .filter(([, value]) => value.enabled)
-      .map(([id, value]) => [id, value.options]),
+      .map(([id, value]) => [
+        id,
+        // Text values are sent trimmed: a pasted client ID often drags a trailing newline along.
+        Object.fromEntries(Object.entries(value.options).map(([name, option]) => [name, typeof option === "string" ? option.trim() : option])),
+      ]),
   );
 }
 
@@ -273,6 +285,7 @@ export function toRequestBody(state: FormState): CreateAppRequestBody {
     features: state.features,
     optional: selectedOptIn(state, "optional"),
     experimental: selectedOptIn(state, "experimental"),
+    extension: selectedOptIn(state, "extension"),
     users: state.users.map((user) => ({ username: user.username.trim(), password: user.password })),
   };
 }
@@ -287,5 +300,8 @@ export function enabledSummary(state: FormState): EnabledSummary {
       label: feature.label,
       endpoints: feature.endpoints.join(" / "),
     })),
+    extension: labels("extension", EXTENSION_FEATURES)
+      .filter((feature) => feature.after_create)
+      .map((feature) => ({ label: feature.label, afterCreate: feature.after_create ?? "" })),
   };
 }
