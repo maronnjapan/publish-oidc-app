@@ -32,23 +32,33 @@ function parseRequestConfig(row, opId) {
   if (!config.features || FEATURES.some((feature) => typeof config.features[feature] !== "boolean")) throw new Error("features are invalid");
   if (config.experimental !== undefined && (typeof config.experimental !== "object" || config.experimental === null || Array.isArray(config.experimental))) throw new Error("experimental selection is invalid");
   if (config.optional !== undefined && (typeof config.optional !== "object" || config.optional === null || Array.isArray(config.optional))) throw new Error("optional selection is invalid");
+  if (config.extension !== undefined && (typeof config.extension !== "object" || config.extension === null || Array.isArray(config.extension))) throw new Error("extension selection is invalid");
   return { ...config, op_id: opId };
 }
 
 export const TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange";
 export const DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
+export const JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-bearer";
+export const CIBA_GRANT_TYPE = "urn:openid:params:grant-type:ciba";
 
 /**
  * The generated OP authorizes a grant against the client's registered grantTypes, so an
  * experimental grant has to be registered alongside the standard ones or every exchange
- * comes back unauthorized_client.
+ * comes back unauthorized_client. id-jag reuses the token-exchange grant for issuance (a
+ * dedicated requested_token_type on the same URN) and adds jwt-bearer for redemption, so a
+ * Set dedupes it against a separately-selected token-exchange feature.
  */
 export function clientGrantTypes(features, experimental = {}) {
-  const grantTypes = ["authorization_code"];
-  if (features["refresh-token"]) grantTypes.push("refresh_token");
-  if (experimental["token-exchange"]) grantTypes.push(TOKEN_EXCHANGE_GRANT_TYPE);
-  if (experimental["device-authorization-grant"]) grantTypes.push(DEVICE_CODE_GRANT_TYPE);
-  return grantTypes;
+  const grantTypes = new Set(["authorization_code"]);
+  if (features["refresh-token"]) grantTypes.add("refresh_token");
+  if (experimental["token-exchange"]) grantTypes.add(TOKEN_EXCHANGE_GRANT_TYPE);
+  if (experimental["device-authorization-grant"]) grantTypes.add(DEVICE_CODE_GRANT_TYPE);
+  if (experimental["ciba"]) grantTypes.add(CIBA_GRANT_TYPE);
+  if (experimental["id-jag"]) {
+    grantTypes.add(TOKEN_EXCHANGE_GRANT_TYPE);
+    grantTypes.add(JWT_BEARER_GRANT_TYPE);
+  }
+  return [...grantTypes];
 }
 
 async function createSigningJwk() {
@@ -91,11 +101,11 @@ export async function deployOp(opId) {
 
   const now = new Date().toISOString();
   const expiresAt = new Date(Date.parse(now) + 24 * 60 * 60 * 1000).toISOString();
-  await d1Query(infra, token, `INSERT INTO registry_ops (op_id, script_name, name, url, client_id, client_type, redirect_uri, scopes_json, features_json, created_at, expires_at, status) VALUES (?1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active') ON CONFLICT(op_id) DO UPDATE SET url = excluded.url, created_at = excluded.created_at, expires_at = excluded.expires_at, status = 'active'`, [opId, config.name || opId, issuer, config.client_id, config.client_type, config.redirect_url, JSON.stringify(config.scopes), JSON.stringify({ ...config.features, optional: generated.optional, experimental: generated.experimental }), now, expiresAt]);
+  await d1Query(infra, token, `INSERT INTO registry_ops (op_id, script_name, name, url, client_id, client_type, redirect_uri, scopes_json, features_json, created_at, expires_at, status) VALUES (?1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'active') ON CONFLICT(op_id) DO UPDATE SET url = excluded.url, created_at = excluded.created_at, expires_at = excluded.expires_at, status = 'active'`, [opId, config.name || opId, issuer, config.client_id, config.client_type, config.redirect_url, JSON.stringify(config.scopes), JSON.stringify({ ...config.features, optional: generated.optional, experimental: generated.experimental, extension: generated.extension }), now, expiresAt]);
   const sanitizedConfig = { ...config };
   delete sanitizedConfig.client_secret;
   await d1Query(infra, token, `UPDATE registry_requests SET status = 'deployed', url = ?2, error = NULL, config_json = ?3, updated_at = ?4 WHERE request_id = ?1`, [row.request_id, issuer, JSON.stringify(sanitizedConfig), now]);
-  return { opId, issuer, clientId: config.client_id, clientType: config.client_type, optional: Object.keys(generated.optional), experimental: Object.keys(generated.experimental) };
+  return { opId, issuer, clientId: config.client_id, clientType: config.client_type, optional: Object.keys(generated.optional), experimental: Object.keys(generated.experimental), extension: Object.keys(generated.extension) };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

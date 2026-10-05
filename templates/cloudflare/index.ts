@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { ClientInfo, SigningKey, SigningKeyProvider, TokenClientInfo } from '@maronn-openid-connect/core';
 import { applyOidc } from './oidc-provider/apply.js';
-import { createD1DeviceAuthorizationStore, createD1ParStore, createD1ProviderStores } from './oidc-provider/persistence.js';
+import { createD1CibaAuthenticationRequestStore, createD1CibaLoginTransactionStore, createD1DeviceAuthorizationStore, createD1ParStore, createD1ProviderStores } from './oidc-provider/persistence.js';
 
 interface Env {
   DB: D1Database;
@@ -30,6 +30,14 @@ const EXPERIMENTAL_FEATURES: Record<string, Record<string, unknown>> = {};
  * later binding edit can switch off is not one.
  */
 const OPTIONAL_FEATURES: Record<string, Record<string, unknown>> = {};
+
+/**
+ * Enabled extension features of @maronn-openid-connect/cli (see extension-features.json),
+ * with the values the publisher typed in (google-login's OAuth client ID). Written at
+ * generation time like the two groups above; scripts/generate-op.mjs also wires the
+ * runtime pieces an extension needs into createWorkerApp (EXTENSION_WIRING).
+ */
+const EXTENSION_FEATURES: Record<string, Record<string, unknown>> = {};
 
 let cachedSigningKey: Promise<SigningKey> | undefined;
 
@@ -61,6 +69,8 @@ function createWorkerApp(env: Env): Hono<{ Bindings: Env; Variables: Record<stri
     // feature was not selected: the generated routes that would read it do not exist.
     c.set('parStore', createD1ParStore(env.DB, env.OP_ID));
     c.set('deviceAuthorizationStore', createD1DeviceAuthorizationStore(env.DB, env.OP_ID));
+    c.set('cibaAuthenticationRequestStore', createD1CibaAuthenticationRequestStore(env.DB, env.OP_ID));
+    c.set('cibaLoginTransactionStore', createD1CibaLoginTransactionStore(env.DB, env.OP_ID));
     c.header('X-Content-Type-Options', 'nosniff');
     c.header('Referrer-Policy', 'no-referrer');
     c.header('X-Frame-Options', 'DENY');
@@ -83,6 +93,7 @@ function createWorkerApp(env: Env): Hono<{ Bindings: Env; Variables: Record<stri
     client_type: client.clientType,
     scopes_supported: scopes,
     optional_features: Object.keys(OPTIONAL_FEATURES),
+    extension_features: Object.keys(EXTENSION_FEATURES),
     experimental_features: Object.keys(EXPERIMENTAL_FEATURES),
     discovery: env.OP_ISSUER + '/.well-known/openid-configuration',
   }));

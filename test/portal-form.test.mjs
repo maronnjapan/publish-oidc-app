@@ -133,6 +133,30 @@ test("openid is always sent and is never a choice", () => {
   assert.equal("openid" in state.initialFormState().scopes, false);
 });
 
+test("custom scopes are parsed from the free-text field, deduplicated, and appended to the selection", () => {
+  const withCustom = reduce(state.initialFormState(), {
+    type: "set-custom-scopes",
+    value: " reports.read, reports.write  reports.read\n",
+  });
+  assert.deepEqual(state.customScopeIds(withCustom), ["reports.read", "reports.write"]);
+  assert.deepEqual(state.selectedScopes(withCustom), ["openid", "reports.read", "reports.write"]);
+  assert.equal(validation.customScopesError(withCustom), "");
+});
+
+test("an invalid or excessive custom scope is reported without touching the standard scopes", () => {
+  const badChars = reduce(state.initialFormState(), { type: "set-custom-scopes", value: "Reports Read!" });
+  assert.notEqual(validation.customScopesError(badChars), "");
+
+  const tooMany = reduce(state.initialFormState(), {
+    type: "set-custom-scopes",
+    value: Array.from({ length: 11 }, (_, index) => `custom${index}`).join(","),
+  });
+  assert.notEqual(validation.customScopesError(tooMany), "");
+
+  const clean = reduce(state.initialFormState(), { type: "set-custom-scopes", value: "" });
+  assert.equal(validation.customScopesError(clean), "");
+});
+
 test("accounts are capped at five and the last row cannot be removed", () => {
   let current = state.initialFormState();
   for (let index = 0; index < 10; index += 1) current = state.formReducer(current, { type: "add-user" });
@@ -178,11 +202,34 @@ test("the request body the form builds is one the Worker accepts", () => {
     filledState(),
     { type: "toggle-scope", id: "profile", value: true },
     { type: "toggle-opt-in", group: "optional", id: "transaction-binding", value: true },
+    { type: "set-custom-scopes", value: "reports.read" },
   );
   const parsed = shared.parseCreateApp(state.toRequestBody(ready));
   assert.equal(parsed.ok, true, parsed.message);
-  assert.deepEqual(parsed.value.scopes, ["openid", "profile"]);
+  assert.deepEqual(parsed.value.scopes, ["openid", "profile", "reports.read"]);
   assert.deepEqual(parsed.value.optional, { "transaction-binding": {} });
+});
+
+test("a text option is required once its feature is on, and is sent trimmed", () => {
+  const clientId = "1234567890-abc.apps.googleusercontent.com";
+  const feature = (value) => ({ type: "toggle-opt-in-option", group: "extension", id: "google-login", option: "clientId", value });
+
+  // Unticked, the empty field is not an error and the feature is absent from the request.
+  assert.equal(validation.formErrors(filledState()).valid, true);
+  assert.deepEqual(state.toRequestBody(filledState()).extension, {});
+
+  const enabled = reduce(filledState(), { type: "toggle-opt-in", group: "extension", id: "google-login", value: true });
+  const key = validation.optInErrorKey("extension", "google-login", "clientId");
+  assert.equal(validation.formErrors(enabled).valid, false);
+  assert.match(validation.formErrors(enabled).optIn[key], /入力してください/);
+  assert.match(validation.formErrors(reduce(enabled, feature("nope"))).optIn[key], /形式が正しくありません/);
+
+  const filled = reduce(enabled, feature(`  ${clientId}\n`));
+  assert.equal(validation.formErrors(filled).valid, true);
+  assert.deepEqual(state.selectedOptIn(filled, "extension"), { "google-login": { clientId, requireVerifiedEmail: false } });
+  const parsed = shared.parseCreateApp(state.toRequestBody(filled));
+  assert.equal(parsed.ok, true, parsed.message);
+  assert.deepEqual(parsed.value.extension, { "google-login": { clientId, requireVerifiedEmail: false } });
 });
 
 test("field errors name the field, and a valid form reports none", () => {

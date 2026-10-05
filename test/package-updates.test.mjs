@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { compareCatalogToCli, compareVersions, experimentalFeatureIds, helpGroupHeadings, renderReport, unknownHelpHeadings } from "../scripts/check-package-updates.mjs";
+import { compareCatalogToCli, compareVersions, experimentalFeatureIds, helpGroupHeadings, renderReport, standardScopesFromHelp, unknownHelpHeadings } from "../scripts/check-package-updates.mjs";
 
 /** The three toggle groups the pinned CLI prints, in the layout check-package-updates parses. */
 const CLI_HELP = [
@@ -17,6 +17,13 @@ const CLI_HELP = [
   "",
   "Experimental features (disabled by default): par, token-exchange",
   "  Provided by the separate @maronn-openid-connect/experimental package.",
+  "",
+  "Extension features (disabled by default): google-login",
+  "  google-login (@maronn-openid-connect/google-login): adds a Sign in with Google button.",
+  "",
+  "Custom scopes (none declared by default): the standard scopes (openid, profile,",
+  "  email, address, phone, offline_access) are always handled by the generated",
+  "  provider. Declare anything else with --scope.",
 ].join("\n");
 
 test("version comparison orders releases above their prereleases", () => {
@@ -56,12 +63,30 @@ test("every toggle group the help text prints is either parsed or reported as un
     "Features (all enabled by default)",
     "Optional features (disabled by default)",
     "Experimental features (disabled by default)",
+    "Extension features (disabled by default)",
+    "Custom scopes (none declared by default)",
   ]);
   assert.deepEqual(unknownHelpHeadings(CLI_HELP), []);
   // The failure this guards against: the CLI grew "Optional features" as a third group and
-  // the report said nothing, because a group nobody parses looks exactly like no group.
+  // the report said nothing, because a group nobody parses looks exactly like no group. The
+  // same thing happened again with "Custom scopes" as a fourth (docs/custom-scopes.md).
   const withNewGroup = `${CLI_HELP}\n\nHardened features (disabled by default): mtls\n`;
   assert.deepEqual(unknownHelpHeadings(withNewGroup), ["Hardened features (disabled by default)"]);
+});
+
+test("the Extension group is read, so its ids are compared like the other opt-in groups", async () => {
+  const { readExtensionCatalog } = await import("../scripts/lib.mjs");
+  assert.match(CLI_HELP, /^Extension features \(disabled by default\): google-login$/m);
+  const catalog = await readExtensionCatalog();
+  assert.deepEqual(compareCatalogToCli(catalog, ["google-login"]).added, []);
+  assert.deepEqual(compareCatalogToCli(catalog, ["google-login", "github-login"]).added, ["github-login"]);
+  assert.deepEqual(compareCatalogToCli(catalog, []).ungeneratable, ["google-login"]);
+});
+
+test("the standard scopes embedded in the Custom scopes section are read out, or null when absent", () => {
+  assert.deepEqual(standardScopesFromHelp(CLI_HELP), ["openid", "profile", "email", "address", "phone", "offline_access"]);
+  const withoutCustomScopes = CLI_HELP.split("\n\nCustom scopes")[0];
+  assert.equal(standardScopesFromHelp(withoutCustomScopes), null);
 });
 
 test("a catalog is compared against the ids the CLI says it can generate", () => {
@@ -81,7 +106,9 @@ test("the report calls out new, removed, and unwired features in both opt-in gro
     packages: [{ name: "@maronn-openid-connect/experimental", pinned: "0.0.1", latest: "0.1.0", hasUpdate: true }],
     experimental: { latest: "0.1.0", published: ["par", "dpop"], added: ["dpop"], removed: ["rar"], unwired: ["dpop"], unsupportedSubpaths: [] },
     optional: { published: ["transaction-binding", "mtls"], added: ["mtls"], removed: ["retired-thing"], unwired: ["mtls"], ungeneratable: [] },
-    cli: { latest: "0.1.0", features: ["pkce"], optional: ["transaction-binding"], experimental: ["par"], added: ["pkce-plus"], removed: [], ungeneratable: ["dpop"], unknownSections: ["Hardened features (disabled by default)"] },
+    extension: { published: ["google-login", "github-login"], added: ["github-login"], removed: ["retired-extension"], unwired: ["github-login"], ungeneratable: [] },
+    cli: { latest: "0.1.0", features: ["pkce"], optional: ["transaction-binding"], experimental: ["par"], extension: ["google-login"], added: ["pkce-plus"], removed: [], ungeneratable: ["dpop"], unknownSections: ["Hardened features (disabled by default)"] },
+    customScopes: { supported: true, standardScopes: ["openid", "phone_number"], added: ["phone_number"], removed: ["phone"] },
     hasUpdates: true,
     hasCatalogWork: true,
   });
@@ -99,6 +126,17 @@ test("the report calls out new, removed, and unwired features in both opt-in gro
   assert.match(markdown, /最新CLIのoptionalトグル: `transaction-binding`/);
   assert.match(markdown, /docs\/optional-features\.md/);
   assert.match(markdown, /未知のトグル分類: `Hardened features \(disabled by default\)`/);
+
+  assert.match(markdown, /### 拡張機能/);
+  assert.match(markdown, /新機能: `github-login`/);
+  assert.match(markdown, /削除された機能: `retired-extension`/);
+  assert.match(markdown, /最新CLIのextensionトグル: `google-login`/);
+  assert.match(markdown, /docs\/extension-features\.md/);
+
+  assert.match(markdown, /### カスタムスコープ/);
+  assert.match(markdown, /標準スコープ: `openid`, `phone_number`/);
+  assert.match(markdown, /未知の標準スコープ: `phone_number`/);
+  assert.match(markdown, /消えた標準スコープ: `phone`/);
 });
 
 test("the report says so when the optional group could not be inspected", () => {
@@ -117,21 +155,25 @@ test("the report says so when the optional group could not be inspected", () => 
 
 test("the tracked packages stay pinned to exact versions", async () => {
   const rootPackage = JSON.parse(await readFile("package.json", "utf8"));
-  for (const [key, name] of [["maronnOidcCli", "@maronn-openid-connect/cli"], ["maronnOidcCore", "@maronn-openid-connect/core"], ["maronnOidcExperimental", "@maronn-openid-connect/experimental"]]) {
+  for (const [key, name] of [["maronnOidcCli", "@maronn-openid-connect/cli"], ["maronnOidcCore", "@maronn-openid-connect/core"], ["maronnOidcExperimental", "@maronn-openid-connect/experimental"], ["maronnOidcGoogleLogin", "@maronn-openid-connect/google-login"]]) {
     assert.match(rootPackage.config[key], new RegExp(`^${name}@\\d+\\.\\d+\\.\\d+$`));
   }
   assert.match(rootPackage.dependencies["@maronn-openid-connect/experimental"], /^\d+\.\d+\.\d+$/);
+  assert.match(rootPackage.dependencies["@maronn-openid-connect/google-login"], /^\d+\.\d+\.\d+$/);
   assert.equal(rootPackage.scripts["packages:check"], "node scripts/check-package-updates.mjs");
   assert.equal(rootPackage.scripts["packages:update"], "node scripts/check-package-updates.mjs --apply");
 });
 
-test("both opt-in catalogs stay readable and mutually exclusive", async () => {
-  const [optional, experimental] = await Promise.all([
+test("the opt-in catalogs stay readable and mutually exclusive", async () => {
+  const [optional, experimental, extension] = await Promise.all([
     readFile("optional-features.json", "utf8").then(JSON.parse),
     readFile("experimental-features.json", "utf8").then(JSON.parse),
+    readFile("extension-features.json", "utf8").then(JSON.parse),
   ]);
   const optionalIds = optional.features.map((feature) => feature.id);
   const experimentalIds = experimental.features.map((feature) => feature.id);
-  // Both groups feed one --enable list, so an id in both would be ambiguous to wire.
+  const extensionIds = extension.features.map((feature) => feature.id);
+  // All groups feed one --enable list, so an id in two of them would be ambiguous to wire.
   assert.deepEqual(optionalIds.filter((id) => experimentalIds.includes(id)), []);
+  assert.deepEqual(extensionIds.filter((id) => optionalIds.includes(id) || experimentalIds.includes(id)), []);
 });

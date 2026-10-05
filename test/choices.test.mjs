@@ -5,6 +5,7 @@ import {
   choiceGroup,
   readChoiceCatalog,
   readExperimentalCatalog,
+  readExtensionCatalog,
   readOptionalCatalog,
   supportedFeatures,
   validateLinks,
@@ -29,6 +30,7 @@ const catalog = await readChoiceCatalog();
 const infra = JSON.parse(await readFile("infra.json", "utf8"));
 const experimentalCatalog = await readExperimentalCatalog();
 const optionalCatalog = await readOptionalCatalog();
+const extensionCatalog = await readExtensionCatalog();
 
 function everyItem() {
   return catalog.groups.flatMap((group) => group.items.map((item) => ({ group: group.id, item })));
@@ -43,7 +45,7 @@ test("every selectable item carries a one-line summary", () => {
   for (const { group, item } of everyItem()) {
     assert.ok(item.summary.trim().length > 0, `${group}.${item.id} has an empty summary`);
   }
-  for (const feature of [...supportedFeatures(experimentalCatalog), ...supportedFeatures(optionalCatalog)]) {
+  for (const feature of [...supportedFeatures(experimentalCatalog), ...supportedFeatures(optionalCatalog), ...supportedFeatures(extensionCatalog)]) {
     assert.ok(feature.summary.trim().length > 0, `${feature.id} has an empty summary`);
   }
 });
@@ -59,12 +61,19 @@ test("catalog ids match the lists the portal, generator and follow-up check enfo
   const literal = (source, name) => JSON.parse(source.match(new RegExp(`${name} = (\\[[^\\]]*\\])`))[1].replace(/'/g, '"'));
   assert.deepEqual(literal(await readFile("scripts/generate-op.mjs", "utf8"), "const FEATURES"), [...FEATURE_NAMES]);
   assert.deepEqual(literal(await readFile("scripts/check-package-updates.mjs", "utf8"), "const KNOWN_CLI_FEATURES"), [...FEATURE_NAMES]);
+
+  // Custom scopes (docs/custom-scopes.md) has no catalog of its own, but the generator and
+  // the follow-up check both need to know which scopes are standard (i.e. NOT custom), and
+  // that list has to match the scope group above exactly.
+  const standardScopes = [REQUIRED_SCOPE, ...OPTIONAL_SCOPES];
+  assert.deepEqual(literal(await readFile("scripts/generate-op.mjs", "utf8"), "const STANDARD_SCOPES"), standardScopes);
+  assert.deepEqual(literal(await readFile("scripts/check-package-updates.mjs", "utf8"), "const KNOWN_STANDARD_SCOPES"), standardScopes);
 });
 
 test("declared links resolve, and repository links point at a file that exists", async () => {
   const links = [
     ...everyItem().flatMap(({ group, item }) => (item.links ?? []).map((link) => ({ where: `${group}.${item.id}`, link }))),
-    ...[...experimentalCatalog.features, ...optionalCatalog.features].flatMap((feature) => [
+    ...[...experimentalCatalog.features, ...optionalCatalog.features, ...extensionCatalog.features].flatMap((feature) => [
       ...(feature.links ?? []).map((link) => ({ where: feature.id, link })),
       ...(feature.options ?? []).flatMap((option) => (option.links ?? []).map((link) => ({ where: `${feature.id}.${option.id}`, link }))),
     ]),
@@ -103,7 +112,7 @@ test("every declared link reaches the form", async () => {
   const html = await portalHtml();
   const declared = [
     ...everyItem().flatMap(({ item }) => item.links ?? []),
-    ...[...supportedFeatures(experimentalCatalog), ...supportedFeatures(optionalCatalog)].flatMap((feature) => [
+    ...[...supportedFeatures(experimentalCatalog), ...supportedFeatures(optionalCatalog), ...supportedFeatures(extensionCatalog)].flatMap((feature) => [
       ...(feature.links ?? []),
       ...(feature.options ?? []).flatMap((option) => option.links ?? []),
     ]),

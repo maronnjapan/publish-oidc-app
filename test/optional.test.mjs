@@ -193,3 +193,18 @@ test("another transactions binding cookie cannot approve consent", async () => {
   assert.equal(response.status, 400);
   assert.equal(response.headers.get("location"), null);
 });
+
+test("a scope the publisher did not select is refused at /authorize with a redirected invalid_scope", async () => {
+  // Regression: since the CLI split routes/authorize.ts from its page layer, the scope
+  // enforcement patch has to return an authorization_response outcome rather than call
+  // c.redirect(), or the refusal is mistaken for a normal outcome and the request fails.
+  const { fetch: fetchWorker } = await unbound.client();
+  const authorizeUrl = new URL(`${unbound.issuer}/authorize`);
+  for (const [name, value] of Object.entries({ response_type: "code", client_id: config.client_id, redirect_uri: config.redirect_url, scope: "openid address", state: "scope-state", code_challenge: "x".repeat(43), code_challenge_method: "S256" })) authorizeUrl.searchParams.set(name, value);
+  const response = await fetchWorker(new Request(authorizeUrl));
+  assert.equal(response.status, 302);
+  const location = new URL(response.headers.get("location"));
+  assert.equal(`${location.origin}${location.pathname}`, config.redirect_url);
+  assert.equal(location.searchParams.get("error"), "invalid_scope");
+  assert.equal(location.searchParams.get("state"), "scope-state");
+});

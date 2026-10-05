@@ -1,10 +1,11 @@
 import choiceCatalog from "../../../../portal-choices.json";
 import experimentalCatalog from "../../../../experimental-features.json";
+import extensionCatalog from "../../../../extension-features.json";
 import infra from "../../../../infra.json";
 import optionalCatalog from "../../../../optional-features.json";
 
 /**
- * The three catalog JSON files, typed and resolved once.
+ * The three opt-in catalog JSON files (plus the choices catalog), typed and resolved once.
  *
  * They are the single source of truth for what the form offers and for the one-line summary
  * and reference links of every item, and they are imported by both bundles: the server
@@ -29,9 +30,13 @@ export interface CatalogOption {
   default?: boolean;
   hint?: string;
   links?: ChoiceLink[];
+  /** Checkbox unless "text", which is a required input whose value must match `pattern`. */
+  type?: "text";
+  pattern?: string;
+  placeholder?: string;
 }
 
-/** One entry of experimental-features.json or optional-features.json; the shape is shared. */
+/** One entry of the three opt-in catalogs (experimental, optional, extension); the shape is shared. */
 export interface CatalogFeature {
   id: string;
   status: string;
@@ -41,6 +46,8 @@ export interface CatalogFeature {
   endpoints: string[];
   options?: CatalogOption[];
   links?: ChoiceLink[];
+  /** Shown on the completion screen once the OP exists; `{op_url}` becomes the OP's URL. */
+  after_create?: string;
 }
 
 /** One entry of portal-choices.json: a checkbox or select option plus its one-line summary. */
@@ -59,8 +66,8 @@ export interface ChoiceGroup {
   items: ChoiceItem[];
 }
 
-/** The two opt-in groups share a shape but never share an id: the group decides the field. */
-export type OptInGroup = "optional" | "experimental";
+/** The opt-in groups share a shape but never share an id: the group decides the field. */
+export type OptInGroup = "optional" | "experimental" | "extension";
 
 export const CHOICE_GROUPS: ChoiceGroup[] = choiceCatalog.groups as ChoiceGroup[];
 
@@ -70,6 +77,9 @@ export const EXPERIMENTAL_FEATURES: CatalogFeature[] = (experimentalCatalog.feat
 export const OPTIONAL_FEATURES: CatalogFeature[] = (optionalCatalog.features as CatalogFeature[])
   .filter((feature) => feature.status === "supported");
 
+export const EXTENSION_FEATURES: CatalogFeature[] = (extensionCatalog.features as CatalogFeature[])
+  .filter((feature) => feature.status === "supported");
+
 export function choiceItems(groupId: string): ChoiceItem[] {
   const group = CHOICE_GROUPS.find((entry) => entry.id === groupId);
   if (!group) throw new Error(`portal-choices.json has no group ${JSON.stringify(groupId)}`);
@@ -77,7 +87,8 @@ export function choiceItems(groupId: string): ChoiceItem[] {
 }
 
 export function optInFeatures(group: OptInGroup): CatalogFeature[] {
-  return group === "experimental" ? EXPERIMENTAL_FEATURES : OPTIONAL_FEATURES;
+  if (group === "experimental") return EXPERIMENTAL_FEATURES;
+  return group === "extension" ? EXTENSION_FEATURES : OPTIONAL_FEATURES;
 }
 
 /**

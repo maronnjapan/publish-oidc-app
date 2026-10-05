@@ -1,12 +1,14 @@
 import type { ComponentChildren } from "preact";
 import type { CatalogFeature, OptInGroup } from "../../shared/catalog";
 import type { FormAction, FormState } from "../form-state";
-import { Hint } from "./Hints";
+import { FieldError, Hint } from "./Hints";
+import { optInErrorKey, type FormErrors } from "../validation";
 
 /**
- * The opt-in feature groups: the CLI's own stable-but-off-by-default features, and the
- * experimental package's. They share this component because they share a catalog shape;
- * only the framing around them differs, which is what the two cards below supply.
+ * The opt-in feature groups: the CLI's own stable-but-off-by-default features, the
+ * experimental package's, and the extension integrations. They share this component because
+ * they share a catalog shape; only the framing around them differs, which is what the
+ * card below supplies.
  *
  * A feature's sub-options stay disabled until the feature itself is on — selecting an option
  * of a feature that is not generated would silently do nothing.
@@ -15,11 +17,13 @@ function FeatureToggles({
   group,
   features,
   state,
+  errors,
   dispatch,
 }: {
   group: OptInGroup;
   features: CatalogFeature[];
   state: FormState;
+  errors: FormErrors;
   dispatch: (action: FormAction) => void;
 }) {
   return (
@@ -50,7 +54,40 @@ function FeatureToggles({
             ) : (
               <Hint>エンドポイントもDiscoveryメタデータも増えません。</Hint>
             )}
-            {(feature.options ?? []).map((option) => (
+            {(feature.options ?? []).map((option) =>
+              option.type === "text" ? (
+                <div class="feature-option-row" key={option.id}>
+                  <label class="block" for={`${group}-${feature.id}-${option.id}`}>
+                    {option.label}
+                  </label>
+                  <input
+                    id={`${group}-${feature.id}-${option.id}`}
+                    class={`${group}-option-text`}
+                    type="text"
+                    data-feature={feature.id}
+                    data-option={option.id}
+                    autocomplete="off"
+                    spellcheck={false}
+                    placeholder={option.placeholder}
+                    value={String(selection.options[option.id] ?? "")}
+                    disabled={!selection.enabled}
+                    onInput={(event) =>
+                      dispatch({
+                        type: "toggle-opt-in-option",
+                        group,
+                        id: feature.id,
+                        option: option.id,
+                        value: event.currentTarget.value,
+                      })
+                    }
+                  />
+                  <FieldError
+                    message={errors.optIn[optInErrorKey(group, feature.id, option.id)] ?? ""}
+                    show={state.showErrors}
+                  />
+                  {option.hint || option.links ? <Hint links={option.links}>{option.hint ?? ""}</Hint> : null}
+                </div>
+              ) : (
               <div class="feature-option-row" key={option.id}>
                 <label>
                   <input
@@ -74,7 +111,8 @@ function FeatureToggles({
                 </label>
                 {option.hint || option.links ? <Hint links={option.links}>{option.hint ?? ""}</Hint> : null}
               </div>
-            ))}
+              ),
+            )}
           </div>
         );
       })}
@@ -86,12 +124,14 @@ export function OptInCard({
   group,
   features,
   state,
+  errors,
   dispatch,
   children,
 }: {
   group: OptInGroup;
   features: CatalogFeature[];
   state: FormState;
+  errors: FormErrors;
   dispatch: (action: FormAction) => void;
   /** The framing the group needs around its toggles: a warning, or a folded summary. */
   children: (toggles: ComponentChildren) => ComponentChildren;
@@ -99,7 +139,7 @@ export function OptInCard({
   if (features.length === 0) return null;
   return (
     <section class="card">
-      {children(<FeatureToggles group={group} features={features} state={state} dispatch={dispatch} />)}
+      {children(<FeatureToggles group={group} features={features} state={state} errors={errors} dispatch={dispatch} />)}
     </section>
   );
 }

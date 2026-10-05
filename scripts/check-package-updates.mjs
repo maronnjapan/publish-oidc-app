@@ -9,7 +9,7 @@
 // Reporting covers four questions:
 //   1. is a newer version published?
 //   2. does @maronn-openid-connect/experimental export a feature the catalog does not know about?
-//   3. does the CLI offer an opt-in "optional" feature the catalog does not know about?
+//   3. does the CLI offer an opt-in "optional" or "extension" feature the catalog does not know about?
 //   4. did the CLI's default feature toggles change?
 // Newly discovered opt-in features are recorded as status "detected" in their catalog;
 // wiring them up so the portal can offer them is a code change described in
@@ -20,7 +20,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
-import { EXPERIMENTAL_CATALOG_PATH, FEATURE_ID_PATTERN, OPTIONAL_CATALOG_PATH, ROOT, readExperimentalCatalog, readOptionalCatalog } from "./lib.mjs";
+import { EXPERIMENTAL_CATALOG_PATH, EXTENSION_CATALOG_PATH, FEATURE_ID_PATTERN, OPTIONAL_CATALOG_PATH, ROOT, readExperimentalCatalog, readExtensionCatalog, readOptionalCatalog } from "./lib.mjs";
 
 const execFile = promisify(execFileCallback);
 const REGISTRY = (process.env.NPM_CONFIG_REGISTRY || "https://registry.npmjs.org").replace(/\/$/, "");
@@ -29,10 +29,21 @@ const TRACKED_PACKAGES = [
   { name: "@maronn-openid-connect/cli", configKey: "maronnOidcCli", dependencyField: "devDependencies" },
   { name: "@maronn-openid-connect/core", configKey: "maronnOidcCore", dependencyField: "dependencies" },
   { name: "@maronn-openid-connect/experimental", configKey: "maronnOidcExperimental", dependencyField: "dependencies" },
+  // The one package behind the CLI's "Extension features" group today. Each extension is its
+  // own package that the generated code imports, so it has to be installed and pinned here.
+  { name: "@maronn-openid-connect/google-login", configKey: "maronnOidcGoogleLogin", dependencyField: "dependencies" },
 ];
 
 /** Feature toggles the generator and the portal currently understand. */
 const KNOWN_CLI_FEATURES = ["pkce", "refresh-token", "introspection", "revocation", "request-object"];
+
+/**
+ * The standard scopes @maronn-openid-connect/core handles itself, whatever the publisher
+ * declares with --scope. Mirrors REQUIRED_SCOPE + OPTIONAL_SCOPES in
+ * system/portal/src/shared/rules.ts and STANDARD_SCOPES in scripts/generate-op.mjs; test/
+ * choices.test.mjs checks all three stay equal.
+ */
+const KNOWN_STANDARD_SCOPES = ["openid", "profile", "email", "address", "phone", "offline_access"];
 
 function splitVersion(version) {
   const [core, prerelease = ""] = version.split(/-(.*)/s);
@@ -138,7 +149,26 @@ const HELP_SECTIONS = {
   features: /^Features \(all enabled by default\):[^\S\n]*(.+)$/m,
   optional: /^Optional features \(disabled by default\):[^\S\n]*(.+)$/m,
   experimental: /^Experimental features \(disabled by default\):[^\S\n]*(.+)$/m,
+  extension: /^Extension features \(disabled by default\):[^\S\n]*(.+)$/m,
+  // Unlike the three groups above this is not a comma list of feature ids: it is prose
+  // describing the --scope flag, wrapped onto several lines. The heading alone is enough
+  // to keep it out of unknownHelpHeadings(); standardScopesFromHelp() below reads the
+  // "standard scopes (...)" parenthetical it embeds for the one thing worth tracking here.
+  customScopes: /^Custom scopes \([^)\n]*\):/m,
 };
+
+/**
+ * The CLI's own list of standard scope ids, read out of the "Custom scopes" section's prose
+ * (see HELP_SECTIONS.customScopes above). Returns null when the CLI has no such section at
+ * all, so the caller can tell "no --scope support" apart from "support, but the wording
+ * changed and this no longer parses".
+ */
+export function standardScopesFromHelp(helpText) {
+  if (!HELP_SECTIONS.customScopes.test(helpText)) return null;
+  const match = helpText.match(/standard scopes \(([\s\S]*?)\)/);
+  if (!match) return [];
+  return match[1].replace(/\s+/g, " ").trim().split(",").map((scope) => scope.trim()).filter(Boolean);
+}
 
 /** Every top-level "<name> (<qualifier>):" heading the help text prints, heading only. */
 export function helpGroupHeadings(helpText) {
@@ -166,10 +196,13 @@ async function cliFeatures(version) {
   if (!standard) return null;
   const optional = stdout.match(HELP_SECTIONS.optional);
   const experimental = stdout.match(HELP_SECTIONS.experimental);
+  const extension = stdout.match(HELP_SECTIONS.extension);
   return {
     features: parseFeatureList(standard[1]),
     optional: optional ? parseFeatureList(optional[1]) : [],
     experimental: experimental ? parseFeatureList(experimental[1]) : [],
+    extension: extension ? parseFeatureList(extension[1]) : [],
+    standardScopes: standardScopesFromHelp(stdout),
     unknownSections: unknownHelpHeadings(stdout),
   };
 }
@@ -194,6 +227,7 @@ export async function collectReport({ inspectCliFeatures = true } = {}) {
   const rootPackage = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"));
   const catalog = await readExperimentalCatalog();
   const optionalCatalog = await readOptionalCatalog();
+  const extensionCatalog = await readExtensionCatalog();
   const packages = [];
   let experimentalManifest = null;
 
@@ -236,6 +270,7 @@ export async function collectReport({ inspectCliFeatures = true } = {}) {
     features: toggles?.features ?? null,
     optional: toggles?.optional ?? null,
     experimental: toggles?.experimental ?? null,
+    extension: toggles?.extension ?? null,
     added: toggles ? toggles.features.filter((feature) => !KNOWN_CLI_FEATURES.includes(feature)) : [],
     removed: toggles ? KNOWN_CLI_FEATURES.filter((feature) => !toggles.features.includes(feature)) : [],
     // A catalog entry the CLI cannot generate is unusable, whatever the package exports.
@@ -256,15 +291,43 @@ export async function collectReport({ inspectCliFeatures = true } = {}) {
       }
     : null;
 
+  // Extension features are the CLI's third-party-package integrations (google-login today).
+  // Like the optional group, --help is the only source, so this block is null under
+  // --skip-cli-features.
+  const extension = toggles
+    ? {
+        ...compareCatalogToCli(extensionCatalog, toggles.extension),
+        removed: extensionCatalog.features.map((feature) => feature.id).filter((id) => !toggles.extension.includes(id)),
+      }
+    : null;
+  const extensionWork = extension ? extension.added.length + extension.removed.length + extension.unwired.length : 0;
+
   const optionalWork = optional ? optional.added.length + optional.removed.length + optional.unwired.length : 0;
+
+  // Custom scopes (--scope) are not an opt-in feature catalog — a publisher declares
+  // arbitrary ids at OP creation time, so there is nothing to mark "detected"/"supported".
+  // The one thing worth tracking here is whether the CLI's own standard-scope list (which
+  // --scope may not redeclare) still matches what this repository assumes.
+  const customScopes = toggles
+    ? {
+        supported: toggles.standardScopes !== null,
+        standardScopes: toggles.standardScopes ?? [],
+        added: (toggles.standardScopes ?? []).filter((scope) => !KNOWN_STANDARD_SCOPES.includes(scope)),
+        removed: toggles.standardScopes ? KNOWN_STANDARD_SCOPES.filter((scope) => !toggles.standardScopes.includes(scope)) : [],
+      }
+    : null;
+  const customScopesWork = customScopes ? customScopes.added.length + customScopes.removed.length : 0;
+
   return {
     checkedAt: new Date().toISOString(),
     packages,
     experimental,
     optional,
+    extension,
     cli,
+    customScopes,
     hasUpdates: packages.some((entry) => entry.hasUpdate),
-    hasCatalogWork: experimental.added.length > 0 || experimental.removed.length > 0 || cli.added.length > 0 || cli.removed.length > 0 || cli.ungeneratable.length > 0 || cli.unknownSections.length > 0 || optionalWork > 0,
+    hasCatalogWork: experimental.added.length > 0 || experimental.removed.length > 0 || cli.added.length > 0 || cli.removed.length > 0 || cli.ungeneratable.length > 0 || cli.unknownSections.length > 0 || optionalWork > 0 || extensionWork > 0 || customScopesWork > 0,
   };
 }
 
@@ -312,6 +375,23 @@ export function renderReport(report) {
   }
   lines.push("");
 
+  lines.push("### 拡張機能（CLI・別package・デフォルト無効）");
+  if (!report.extension) {
+    lines.push("- `maronn-oidc --help` を読んでいないため判定できません（`--skip-cli-features`）。");
+  } else {
+    lines.push(`- 公開中: ${report.extension.published.map((id) => `\`${id}\``).join(", ") || "（なし）"}`);
+    if (report.extension.added.length > 0) {
+      lines.push(`- **新機能: ${report.extension.added.map((id) => `\`${id}\``).join(", ")}** — \`npm run packages:update\` で \`extension-features.json\` に \`status: "detected"\` として追記されます。ポータルで選択できるようにするには \`docs/extension-features.md\` の配線手順が必要です（別packageの追加も要ります）。`);
+    }
+    if (report.extension.removed.length > 0) {
+      lines.push(`- **削除された機能: ${report.extension.removed.map((id) => `\`${id}\``).join(", ")}** — 最新CLIの \`--enable\` が受け付けません。\`extension-features.json\` と \`EXTENSION_WIRING\` から外してください。`);
+    }
+    if (report.extension.unwired.length > 0) {
+      lines.push(`- 未配線のまま残っている機能: ${report.extension.unwired.map((id) => `\`${id}\``).join(", ")}`);
+    }
+  }
+  lines.push("");
+
   lines.push("### CLI 機能トグル");
   if (!report.cli.features) {
     lines.push("- `maronn-oidc --help` からトグル一覧を取得できませんでした。手動で確認してください。");
@@ -319,11 +399,28 @@ export function renderReport(report) {
     lines.push(`- 最新CLIのトグル: ${report.cli.features.map((feature) => `\`${feature}\``).join(", ")}`);
     lines.push(`- 最新CLIのoptionalトグル: ${(report.cli.optional ?? []).map((feature) => `\`${feature}\``).join(", ") || "（なし）"}`);
     lines.push(`- 最新CLIのexperimentalトグル: ${(report.cli.experimental ?? []).map((feature) => `\`${feature}\``).join(", ") || "（なし）"}`);
+    lines.push(`- 最新CLIのextensionトグル: ${(report.cli.extension ?? []).map((feature) => `\`${feature}\``).join(", ") || "（なし）"}`);
     if (report.cli.added.length > 0) lines.push(`- **未対応のトグル: ${report.cli.added.map((feature) => `\`${feature}\``).join(", ")}** — ポータルの \`FEATURE_NAMES\` と生成/デプロイの \`FEATURES\` に追加してください。`);
     if (report.cli.removed.length > 0) lines.push(`- **廃止されたトグル: ${report.cli.removed.map((feature) => `\`${feature}\``).join(", ")}** — 参照を削除してください。`);
     if (report.cli.ungeneratable.length > 0) lines.push(`- **CLIが生成できないカタログ項目: ${report.cli.ungeneratable.map((feature) => `\`${feature}\``).join(", ")}** — カタログでは supported ですが最新CLIの \`--enable\` が受け付けません。カタログを \`detected\` へ戻すか、CLIの更新を待ってください。`);
     if (report.cli.unknownSections.length > 0) {
       lines.push(`- **未知のトグル分類: ${report.cli.unknownSections.map((heading) => `\`${heading}\``).join(", ")}** — \`--help\` にこのリポジトリが解釈していない見出しがあります。新しいカテゴリなら \`scripts/check-package-updates.mjs\` の \`HELP_SECTIONS\` に追加し、対応するカタログと配線を用意してください。`);
+    }
+  }
+  lines.push("");
+
+  lines.push("### カスタムスコープ（`--scope`）");
+  if (!report.customScopes) {
+    lines.push("- `maronn-oidc --help` を読んでいないため判定できません（`--skip-cli-features`）。");
+  } else if (!report.customScopes.supported) {
+    lines.push("- 最新CLIの `--help` に `Custom scopes` セクションがありません（`--scope` 未対応、または見出しの文言が変わってこのリポジトリが解釈できなくなっています）。");
+  } else {
+    lines.push(`- 標準スコープ: ${report.customScopes.standardScopes.map((scope) => `\`${scope}\``).join(", ")}`);
+    if (report.customScopes.added.length > 0) {
+      lines.push(`- **未知の標準スコープ: ${report.customScopes.added.map((scope) => `\`${scope}\``).join(", ")}** — 最新CLIが自前で処理する標準スコープに増減があります。\`scripts/check-package-updates.mjs\` の \`KNOWN_STANDARD_SCOPES\`、\`scripts/generate-op.mjs\` の \`STANDARD_SCOPES\`、\`system/portal/src/shared/rules.ts\` の \`OPTIONAL_SCOPES\` を合わせてください。`);
+    }
+    if (report.customScopes.removed.length > 0) {
+      lines.push(`- **消えた標準スコープ: ${report.customScopes.removed.map((scope) => `\`${scope}\``).join(", ")}** — 同上。`);
     }
   }
   lines.push("");
@@ -354,6 +451,21 @@ function optionalEntryForDetectedFeature(id, version) {
     label: `${id}（未配線）`,
     spec: "",
     summary: `@maronn-openid-connect/cli@${version} が --enable で受け付ける新しいオプション機能です。docs/optional-features.md の手順で配線するとポータルで選択できるようになります。`,
+    links: [],
+    endpoints: [],
+    options: [],
+    detected_version: version,
+  };
+}
+
+function extensionEntryForDetectedFeature(id, version) {
+  return {
+    id,
+    status: "detected",
+    package: null,
+    label: `${id}（未配線）`,
+    spec: "",
+    summary: `@maronn-openid-connect/cli@${version} が --enable で受け付ける新しい拡張機能です。docs/extension-features.md の手順で配線するとポータルで選択できるようになります。`,
     links: [],
     endpoints: [],
     options: [],
@@ -396,6 +508,16 @@ export async function applyUpdates(report) {
       applied.push(`optional-features.json += ${id} (status: detected)`);
     }
     await writeFile(OPTIONAL_CATALOG_PATH, `${JSON.stringify(catalog, null, 2)}\n`);
+  }
+
+  if (report.extension?.added.length > 0) {
+    const cliVersion = report.packages.find((entry) => entry.name === "@maronn-openid-connect/cli").latest;
+    const catalog = JSON.parse(await readFile(EXTENSION_CATALOG_PATH, "utf8"));
+    for (const id of report.extension.added) {
+      catalog.features.push(extensionEntryForDetectedFeature(id, cliVersion));
+      applied.push(`extension-features.json += ${id} (status: detected)`);
+    }
+    await writeFile(EXTENSION_CATALOG_PATH, `${JSON.stringify(catalog, null, 2)}\n`);
   }
 
   if (applied.length > 0) {

@@ -113,6 +113,15 @@ test("a public creation returns no secret and writes a hashed account to D1", as
   assert.equal(user.password_iterations, 1);
 });
 
+test("a custom scope beyond the standard six is accepted and recorded verbatim", async () => {
+  const env = environment();
+  await withDispatch(204, () =>
+    app.fetch(createRequest(createBody("public", { scopes: ["openid", "profile", "reports.read"] })), env),
+  );
+  const [request] = env.DB.rows("SELECT config_json FROM registry_requests");
+  assert.deepEqual(JSON.parse(request.config_json).scopes, ["openid", "profile", "reports.read"]);
+});
+
 test("a confidential creation returns a one-time client secret that CI can read back", async () => {
   const env = environment();
   const result = await withDispatch(204, async () => (await app.fetch(createRequest(createBody("confidential")), env)).json());
@@ -152,7 +161,8 @@ test("rejected creations report the offending field instead of a generic message
   const cases = [
     [createBody("public", { redirect_url: "http://example.com/callback" }), /redirect URL/],
     [createBody("native"), /client type/],
-    [createBody("public", { scopes: ["openid", "unknown"] }), /scope "unknown"/],
+    [createBody("public", { scopes: ["openid", "UNKNOWN"] }), /scope "UNKNOWN"/],
+    [createBody("public", { scopes: ["openid", ...Array.from({ length: 11 }, (_, i) => `custom${i}`)] }), /at most 10 custom scopes/],
     [createBody("public", { scopes: ["openid", "offline_access"], features: { ...features, "refresh-token": false } }), /offline_access/],
     [createBody("public", { users: [{ username: "たろう", password: "password-123" }] }), /user 1 username/],
     [createBody("public", { users: [{ username: "alice", password: "short" }] }), /user 1 password/],
@@ -298,6 +308,31 @@ test("opt-in selections are validated against their catalogs and reach the deplo
   const config = JSON.parse(env.DB.rows("SELECT config_json FROM registry_requests")[0].config_json);
   assert.deepEqual(config.experimental, { par: { required: true } });
   assert.deepEqual(config.optional, { "transaction-binding": {} });
+});
+
+test("an extension selection carries its client ID to the deployment config, and is validated like the other groups", async () => {
+  const clientId = "1234567890-abc.apps.googleusercontent.com";
+  const env = environment();
+  await withDispatch(204, async () => {
+    const response = await app.fetch(createRequest(createBody("public", { extension: { "google-login": { clientId } } })), env);
+    assert.equal(response.status, 202);
+  });
+  const config = JSON.parse(env.DB.rows("SELECT config_json FROM registry_requests")[0].config_json);
+  assert.deepEqual(config.extension, { "google-login": { clientId, requireVerifiedEmail: false } });
+
+  const cases = [
+    [{ extension: { "google-login": {} } }, /extension option "google-login\.clientId" is required/],
+    [{ extension: { "google-login": { clientId: "not-a-client-id" } } }, /does not look like a valid/],
+    [{ extension: { "google-login": { clientId: 7 } } }, /must be a string/],
+    [{ extension: { "google-login": { clientId, requireVerifiedEmail: "yes" } } }, /must be true or false/],
+    [{ extension: { par: {} } }, /extension feature "par"/],
+    [{ optional: { "google-login": { clientId } } }, /optional feature "google-login"/],
+  ];
+  for (const [overrides, expected] of cases) {
+    const response = await app.fetch(createRequest(createBody("public", overrides)), environment());
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).message, expected);
+  }
 });
 
 test("an id may not cross between the optional and experimental groups", async () => {
