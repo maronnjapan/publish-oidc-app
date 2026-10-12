@@ -300,12 +300,14 @@ label.file-button {
   font-weight: 500;
 }
 
-details.optional > summary {
+details.optional > summary,
+details.extension > summary {
   font-weight: 700;
   cursor: pointer;
 }
 
-details.optional[open] > summary {
+details.optional[open] > summary,
+details.extension[open] > summary {
   margin-bottom: 0.3rem;
 }
 

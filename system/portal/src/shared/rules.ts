@@ -13,6 +13,27 @@ export type FeatureName = (typeof FEATURE_NAMES)[number];
 export const OPTIONAL_SCOPES = ["profile", "email", "address", "phone", "offline_access"] as const;
 export const REQUIRED_SCOPE = "openid";
 
+/**
+ * Custom scopes: application-specific scope ids the publisher declares for this OP, beyond
+ * the six standard ones above. They ride in the same `scopes` array — anything that is not
+ * `openid` or one of `OPTIONAL_SCOPES` is by construction custom — and are generated with
+ * the CLI's `--scope` option (see docs/custom-scopes.md). The pattern is stricter than the
+ * CLI's own RFC 6749 §3.3 scope-token rule (which allows almost any printable ASCII) so a
+ * declared id stays readable and cannot collide with `--scope`'s own comma separator.
+ */
+export const CUSTOM_SCOPE_PATTERN = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
+export const CUSTOM_SCOPE_MAX_LENGTH = 40;
+export const MAX_CUSTOM_SCOPES = 10;
+
+export function isValidCustomScope(value: string): boolean {
+  return (
+    value.length <= CUSTOM_SCOPE_MAX_LENGTH &&
+    CUSTOM_SCOPE_PATTERN.test(value) &&
+    value !== REQUIRED_SCOPE &&
+    !(OPTIONAL_SCOPES as readonly string[]).includes(value)
+  );
+}
+
 export const CLIENT_TYPES = ["public", "confidential"] as const;
 export type ClientType = (typeof CLIENT_TYPES)[number];
 

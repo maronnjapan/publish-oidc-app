@@ -230,7 +230,7 @@ step6() {
 
 各選択項目には一行の概要が付き、リンクを設定した項目には仕様書などへのリンクも
 並びます。文言とリンクは portal-choices.json / optional-features.json /
-experimental-features.json で設定します（docs/choices.md）。
+experimental-features.json / extension-features.json で設定します（docs/choices.md）。
 
 必要なら「試験的な機能」（@maronn-openid-connect/experimental、PAR / RFC 9126、
 Token Exchange / RFC 8693、JARM、Device Authorization Grant / RFC 8628）も
@@ -241,6 +241,11 @@ Token Exchange / RFC 8693、JARM、Device Authorization Grant / RFC 8628）も
 （認可トランザクションのブラウザ束縛）。仕様が要求していない堅牢化なので既定では
 無効ですが、試験的な機能とは違い動作は安定しています。詳細は
 docs/optional-features.md を参照してください。
+
+同じく折りたたまれている「拡張機能」は、外部サービスとの連携です（Googleでログイン）。
+GoogleのOAuthクライアントIDの入力が要り、作成後にGoogle Cloud consoleで
+<OPのURL>/login/google を承認済みのリダイレクトURIへ登録する必要があります。
+手順は作成完了画面にも出ます。詳細は docs/extension-features.md を参照してください。
 
 完了後、publicならOP URLとClient ID、confidentialなら加えてClient Secretが
 一度だけ表示されます。OP URLの /.well-known/openid-configuration も確認します。
