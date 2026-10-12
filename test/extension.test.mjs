@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { EXTENSION_WIRING, generateOp, parseExtensionSelection } from "../scripts/generate-op.mjs";
 import { bundle, readExtensionCatalog, supportedFeatures } from "../scripts/lib.mjs";
+import { withCookieJar } from "./support/cookie-jar.mjs";
 import { MemoryD1, base64Url, signingEnvironment } from "./support/d1-mock.mjs";
 
 const execFile = promisify(execFileCallback);
@@ -47,7 +48,7 @@ async function buildWorker(opId, extension) {
       const DB = new MemoryD1();
       await DB.addUser(opId, "alice", "password-123");
       const runtimeEnv = await signingEnvironment(issuer, opId, { ...config, op_id: opId }, DB);
-      return { DB, fetch: (request) => worker.default.fetch(request, runtimeEnv, context) };
+      return { DB, fetch: withCookieJar((request) => worker.default.fetch(request, runtimeEnv, context)) };
     },
   };
 }
@@ -87,6 +88,8 @@ const nonceFrom = (html) => html.match(/data-nonce="([^"]+)"/)?.[1] ?? "";
 /** Starts an authorization request and opens its login page, as a browser would. */
 async function startFlow(target, state) {
   const { fetch: fetchWorker } = target.session ?? (target.session = await target.client());
+  // Each flow is a fresh browser: the D1 and its accounts are shared, the cookies are not.
+  fetchWorker.jar.clear();
   const verifier = "a".repeat(64);
   const challenge = base64Url(new Uint8Array(await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
   const authorizeUrl = new URL(`${target.issuer}/authorize`);
@@ -94,7 +97,7 @@ async function startFlow(target, state) {
   const response = await fetchWorker(new Request(authorizeUrl));
   const loginUrl = new URL(response.headers.get("location"), target.issuer);
   const loginHtml = await (await fetchWorker(new Request(loginUrl))).text();
-  return { fetchWorker, verifier, loginHtml, nonce: nonceFrom(loginHtml), transactionId: loginUrl.searchParams.get("transaction_id") };
+  return { fetchWorker, verifier, loginHtml, nonce: nonceFrom(loginHtml) };
 }
 
 /** The redirect-mode POST Google's script makes once the person picks an account. */
@@ -158,7 +161,7 @@ test("a verified Google account signs in, is provisioned in D1, and completes th
   assert.ok(sessionCookie.includes("="), "the OP session cookie must be set");
 
   const consentCsrf = csrfFrom(await (await flow.fetchWorker(new Request(consentUrl, { headers: { Cookie: sessionCookie } }))).text());
-  const consent = await flow.fetchWorker(new Request(`${google.issuer}/consent`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", Cookie: sessionCookie }, body: new URLSearchParams({ transaction_id: flow.transactionId, csrf_token: consentCsrf, action: "approve" }) }));
+  const consent = await flow.fetchWorker(new Request(`${google.issuer}/consent`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", Cookie: sessionCookie }, body: new URLSearchParams({ csrf_token: consentCsrf, action: "approve" }) }));
   const callback = new URL(consent.headers.get("location"));
   const code = callback.searchParams.get("code");
   assert.ok(code, `no authorization code in ${callback}`);

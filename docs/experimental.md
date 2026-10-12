@@ -54,7 +54,7 @@ CLI（`@maronn-openid-connect/cli`）がこれらの機能を自前で生成し�
 - `/device_authorization` は `/authorize` を経由しないため、公開スコープの強制はこの機能専用のパッチで行います（下表）。作成画面で選ばなかったスコープを要求すると、`device_code` を発行する前に `invalid_scope` で拒否します。
 - この機能を選ぶと、クライアントの登録 `grantTypes` に `urn:ietf:params:oauth:grant-type:device_code` が追加されます（`scripts/deploy-op.mjs` の `clientGrantTypes`）。追加し忘れると全てのポーリングが `unauthorized_client` になります。
 - 検証用の user_code はCLIが生成する `deviceAuthorizationConfig`（`routes/device-authorization.ts`）で有効期限10分・ポーリング間隔5秒・ログイン試行5回までに固定されており、ポータルから調整できる設定項目はありません。
-- `/device` の各POST（`/device`・`/device/login`・`/device/approve`）はCookieバインディングで保護されます（詳しくは生成される `store.ts` のコメントを参照）。これはCLIが常時有効にする防御で、オプション機能の `transaction-binding` とは別物です。
+- `/device` の各POST（`/device`・`/device/login`・`/device/approve`）はCookieバインディングで保護されます（詳しくは生成される `store.ts` のコメントを参照）。これはCLIが常時有効にする防御です（オプション機能だった `transaction-binding` はcli 0.11.0で標準動作に昇格しました）。
 - **永続化が必要です。** 生成コードの `InMemoryDeviceAuthorizationStore`（`store.ts`）は開発用のin-memory実装なので、`templates/cloudflare/persistence.ts` の `createD1DeviceAuthorizationStore` が共有D1版を実装します。レコードは `deviceCode` をキーに `oidc_records`（`kind = 'device-authorization:'`）へ、`userCode` からの逆引き用に `kind = 'device-authorization-user-code:'` の索引レコードを別途持ちます。`consume()` は `DELETE ... RETURNING` の1文で取り出すため、同じ `device_code` を同時に2回ポーリングしても片方しかトークンを得られません（RFC 8628 §3.5 の single use）。
 - `templates/cloudflare/index.ts` は `EXPERIMENTAL_WIRING['device-authorization-grant'].apply()` が `apply.ts` の `c.set('deviceAuthorizationStore', deviceAuthorizationStore)` をD1版優先に書き換えたうえで、entrypointのmiddlewareでD1版を常時 `context` に積みます（この機能を選ばなかったOPでは生成される経路が無いため無害です）。
 

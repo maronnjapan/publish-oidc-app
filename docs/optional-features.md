@@ -24,6 +24,8 @@
 
 ## いま選べる機能
 
+**現在ありません。** `transaction-binding` はcli 0.11.0でCLIの標準動作に昇格したため、カタログ（`optional-features.json`）と `OPTIONAL_WIRING` から外しました。ポータルはカタログが空の間、オプション機能のセクションを描画しません。以下は昇格前の記録です。
+
 | feature-id | 内容 | 準拠仕様 | 追加されるもの |
 |---|---|---|---|
 | `transaction-binding` | 認可トランザクションのブラウザ束縛 | OIDC Core 1.0 §3.1.2.3 / §3.1.2.4 | なし（エンドポイントもDiscoveryメタデータも増えません） |

@@ -201,13 +201,12 @@ test("the request body the form builds is one the Worker accepts", () => {
   const ready = reduce(
     filledState(),
     { type: "toggle-scope", id: "profile", value: true },
-    { type: "toggle-opt-in", group: "optional", id: "transaction-binding", value: true },
     { type: "set-custom-scopes", value: "reports.read" },
   );
   const parsed = shared.parseCreateApp(state.toRequestBody(ready));
   assert.equal(parsed.ok, true, parsed.message);
   assert.deepEqual(parsed.value.scopes, ["openid", "profile", "reports.read"]);
-  assert.deepEqual(parsed.value.optional, { "transaction-binding": {} });
+  assert.deepEqual(parsed.value.optional, {});
 });
 
 test("a text option is required once its feature is on, and is sent trimmed", () => {

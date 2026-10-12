@@ -7,10 +7,10 @@
     "node": ">=22"
   },
   "config": {
-    "maronnOidcCli": "@maronn-openid-connect/cli@0.8.0",
-    "maronnOidcCore": "@maronn-openid-connect/core@0.4.1",
-    "maronnOidcExperimental": "@maronn-openid-connect/experimental@0.0.9",
-    "maronnOidcGoogleLogin": "@maronn-openid-connect/google-login@0.0.4"
+    "maronnOidcCli": "@maronn-openid-connect/cli@0.11.0",
+    "maronnOidcCore": "@maronn-openid-connect/core@0.6.0",
+    "maronnOidcExperimental": "@maronn-openid-connect/experimental@0.0.12",
+    "maronnOidcGoogleLogin": "@maronn-openid-connect/google-login@0.0.7"
   },
   "scripts": {
     "build": "npm run build:portal",
@@ -26,9 +26,9 @@
     "check": "npm run typecheck && npm run audit:scripts && npm test && npm run build"
   },
   "dependencies": {
-    "@maronn-openid-connect/core": "0.4.1",
-    "@maronn-openid-connect/experimental": "0.0.9",
-    "@maronn-openid-connect/google-login": "0.0.4",
+    "@maronn-openid-connect/core": "0.6.0",
+    "@maronn-openid-connect/experimental": "0.0.12",
+    "@maronn-openid-connect/google-login": "0.0.7",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.9.2",
     "preact": "^10.29.8",
@@ -37,7 +37,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260722.1",
-    "@maronn-openid-connect/cli": "0.8.0",
+    "@maronn-openid-connect/cli": "0.11.0",
     "esbuild": "^0.28.1",
     "linkedom": "^0.18.13",
     "typescript": "^5.9.2"

@@ -209,12 +209,9 @@ export const EXPERIMENTAL_WIRING = {
  * generate it stay one decision (see docs/optional-features.md).
  */
 export const OPTIONAL_WIRING = {
-  // Cookie-bound authorization transactions. Self-contained in the generated routes and
-  // store.ts: no new endpoint, no discovery metadata, and the binding hash rides along on
-  // the transaction record the D1 store already persists.
-  "transaction-binding": {
-    apply() {},
-  },
+  // Empty on purpose: cli 0.11.0 promoted its only optional feature (transaction-binding)
+  // to default behavior, so nothing is selectable right now. The table and the catalog stay
+  // so that the next optional feature is data plus one entry here.
 };
 
 /**

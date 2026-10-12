@@ -52,6 +52,11 @@ function signingKeyProvider(jwkText: string): SigningKeyProvider {
       })();
       return cachedSigningKey;
     },
+    // The generated app calls getSigningKeys() directly (core 0.6 / cli 0.11), so a
+    // single-key provider has to answer it too.
+    async getSigningKeys(): Promise<SigningKey[]> {
+      return [await this.getSigningKey()];
+    },
   };
 }
 

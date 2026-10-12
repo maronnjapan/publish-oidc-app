@@ -7,6 +7,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { generateOp } from "../scripts/generate-op.mjs";
 import { bundle } from "../scripts/lib.mjs";
+import { withCookieJar } from "./support/cookie-jar.mjs";
 import { MemoryD1, base64Url, signingEnvironment } from "./support/d1-mock.mjs";
 
 /**
@@ -59,7 +60,7 @@ async function startSession(scopes = config.scopes) {
   const DB = new MemoryD1();
   await DB.addUser(opId, "alice", "password-123");
   const runtimeEnv = await signingEnvironment(issuer, opId, { ...config, scopes }, DB);
-  const fetchWorker = (request) => worker.default.fetch(request, runtimeEnv, context);
+  const fetchWorker = withCookieJar((request) => worker.default.fetch(request, runtimeEnv, context));
   const verifier = "a".repeat(64);
   const challenge = base64Url(new Uint8Array(await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
   return { DB, fetchWorker, verifier, challenge };
@@ -96,15 +97,14 @@ test("a declared custom scope completes the authorization-code flow and is grant
   const authorize = await fetchWorker(new Request(authorizeUrl("openid reports.read", challenge)));
   assert.equal(authorize.status, 302, await authorize.clone().text());
   const loginUrl = new URL(authorize.headers.get("location"), issuer);
-  const transactionId = loginUrl.searchParams.get("transaction_id");
   const loginPage = await fetchWorker(new Request(loginUrl));
   const csrfToken = (await loginPage.text()).match(/name="csrf_token" value="([^"]+)"/)?.[1];
-  assert.ok(transactionId && csrfToken);
+  assert.ok(csrfToken);
 
   const login = await fetchWorker(new Request(`${issuer}/login`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ transaction_id: transactionId, csrf_token: csrfToken, username: "alice", password: "password-123" }),
+    body: new URLSearchParams({ csrf_token: csrfToken, username: "alice", password: "password-123" }),
   }));
   assert.equal(login.status, 302, await login.clone().text());
 
@@ -118,7 +118,7 @@ test("a declared custom scope completes the authorization-code flow and is grant
   const consent = await fetchWorker(new Request(consentUrl, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ transaction_id: transactionId, csrf_token: csrfToken, action: "approve" }),
+    body: new URLSearchParams({ csrf_token: csrfToken, action: "approve" }),
   }));
   assert.equal(consent.status, 302, await consent.clone().text());
   const code = new URL(consent.headers.get("location")).searchParams.get("code");

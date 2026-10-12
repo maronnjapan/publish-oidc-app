@@ -173,11 +173,7 @@ Discoveryは各OPの`/.well-known/openid-configuration`、JWKSは`/.well-known/j
 
 CLIの機能トグルは4分類あります。既定で有効な標準機能、既定で無効だが**安定している**オプション機能、上記の試験的な機能、そして下記の拡張機能です。オプション機能は「OIDC Core / OAuth 2.1 のどの条項も要求していない堅牢化」であるためにCLIが既定で無効にしているもので、APIが不安定なわけではありません。
 
-| feature-id | 内容 | 準拠仕様 | 追加されるもの |
-|---|---|---|---|
-| `transaction-binding` | 認可トランザクションのブラウザ束縛 | OIDC Core 1.0 §3.1.2.3 / §3.1.2.4 | なし |
-
-作成画面では「オプション機能」セクションから選べます。設定する機会がまず無いため、このセクションは既定で折りたたまれています。一覧は`optional-features.json`が単一の情報源です。配線手順と、新しい分類が現れたときの対応は[docs/optional-features.md](docs/optional-features.md)を参照してください。
+いま選べるオプション機能はありません。唯一あった`transaction-binding`（認可トランザクションのブラウザ束縛）はcli 0.11.0で標準動作に昇格し、すべてのOPで有効です（トランザクションIDはURLに載らず、HttpOnlyの`__Host-oidc_txn` Cookieで運ばれます）。次のオプション機能が現れたときのために、カタログと配線の仕組みは残してあり、機能が無い間は作成画面にこのセクションを出しません。登場すると既定で折りたたまれたセクションとして現れます。一覧は`optional-features.json`が単一の情報源です。配線手順と、新しい分類が現れたときの対応は[docs/optional-features.md](docs/optional-features.md)を参照してください。
 
 ## 拡張機能
 
@@ -213,7 +209,7 @@ npm run build
 npm run check
 ```
 
-テストはポータル入力・CSV/UI、選択項目の説明とリンク、IP制限、資格情報の条件分岐、salt付きSHA-256、D1名前空間、CLI機能トグル、生成OPのWorkers bundleを検証します。ポータルとReaperのテストは`node:sqlite`の実データベースをD1インターフェースの裏に置いて動かすので（`test/support/d1-sqlite.mjs`）、SQLとして成立しないクエリはその場で落ちます。フォームのreducer・入力ルール・CSV・作成中のポーリングは、DOMを介さない単体テストです。共有D1のDDLとDrizzleスキーマが一致していることは`test/db-schema.test.mjs`が列単位で検査します。生成物の`persistence.ts`はCLIが生成したストア契約に対して型検査され、契約が変わればCIで落ちます。experimentalについては、PARとToken Exchangeそれぞれを有効にしたOPを実際に生成・バンドルし、`POST /par`から`/token`までのフロー、`request_uri`の使い捨て（並行リクエスト含む）、必須モード、スコープ絞り込み交換まで通します。optionalについては、`transaction-binding`を有効にしたOPと無効なOPを生成し、Cookieを持つブラウザだけが認可コードを取得できること・他のトランザクションのCookieでは同意を代行できないことまで通します。あわせて固定CLIの`--help`を実行し、解釈できない見出しの分類が増えていないかも検査します。
+テストはポータル入力・CSV/UI、選択項目の説明とリンク、IP制限、資格情報の条件分岐、salt付きSHA-256、D1名前空間、CLI機能トグル、生成OPのWorkers bundleを検証します。ポータルとReaperのテストは`node:sqlite`の実データベースをD1インターフェースの裏に置いて動かすので（`test/support/d1-sqlite.mjs`）、SQLとして成立しないクエリはその場で落ちます。フォームのreducer・入力ルール・CSV・作成中のポーリングは、DOMを介さない単体テストです。共有D1のDDLとDrizzleスキーマが一致していることは`test/db-schema.test.mjs`が列単位で検査します。生成物の`persistence.ts`はCLIが生成したストア契約に対して型検査され、契約が変わればCIで落ちます。experimentalについては、PARとToken Exchangeそれぞれを有効にしたOPを実際に生成・バンドルし、`POST /par`から`/token`までのフロー、`request_uri`の使い捨て（並行リクエスト含む）、必須モード、スコープ絞り込み交換まで通します。optionalについては、カタログが固定CLIの`--help`と一致することと、標準になった`transaction-binding`のCookie束縛（Cookieの無いブラウザはログイン画面のCSRFトークンを読めない）を検査します。あわせて固定CLIの`--help`を実行し、解釈できない見出しの分類が増えていないかも検査します。
 
 ## セキュリティと運用
 

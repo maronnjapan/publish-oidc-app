@@ -300,14 +300,14 @@ test("opt-in selections are validated against their catalogs and reach the deplo
   const env = environment();
   await withDispatch(204, async () => {
     const response = await app.fetch(
-      createRequest(createBody("public", { experimental: { par: { required: true } }, optional: { "transaction-binding": {} } })),
+      createRequest(createBody("public", { experimental: { par: { required: true } } })),
       env,
     );
     assert.equal(response.status, 202);
   });
   const config = JSON.parse(env.DB.rows("SELECT config_json FROM registry_requests")[0].config_json);
   assert.deepEqual(config.experimental, { par: { required: true } });
-  assert.deepEqual(config.optional, { "transaction-binding": {} });
+  assert.deepEqual(config.optional, {});
 });
 
 test("an extension selection carries its client ID to the deployment config, and is validated like the other groups", async () => {
@@ -338,6 +338,8 @@ test("an extension selection carries its client ID to the deployment config, and
 test("an id may not cross between the optional and experimental groups", async () => {
   const cases = [
     [{ optional: { par: {} } }, /optional feature "par"/],
+    // Promoted to default behavior in cli 0.11.0: a stale portal must not ask for it.
+    [{ optional: { "transaction-binding": {} } }, /optional feature "transaction-binding"/],
     [{ experimental: { "transaction-binding": {} } }, /experimental feature "transaction-binding"/],
     [{ experimental: { par: { nope: true } } }, /experimental option "par\.nope"/],
     [{ experimental: { par: { required: "yes" } } }, /must be true or false/],

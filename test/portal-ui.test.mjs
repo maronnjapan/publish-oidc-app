@@ -97,7 +97,7 @@ test("the experimental section warns that the package is unstable", () => {
   assert.match(html, /マイナーリリースでも破壊的変更や削除が起こり得ます/);
 });
 
-test("the optional section is folded away and does not borrow the experimental warning", () => {
+test("the optional section is folded away and does not borrow the experimental warning", { skip: catalog.OPTIONAL_FEATURES.length === 0 && "no optional feature is selectable right now" }, () => {
   for (const feature of catalog.OPTIONAL_FEATURES) {
     assert.match(html, new RegExp(`class="optional-toggle-input" type="checkbox" value="${feature.id}"`));
   }
@@ -124,7 +124,7 @@ test("the extension section is folded away, asks for the client ID, and does not
   const section = html.slice(start, html.indexOf("</details>", start));
   assert.doesNotMatch(section, /他の機能より適切に動作しない/);
   // The optional section keeps its own framing: the extension must not have replaced it.
-  assert.match(html, /<details class="optional">/);
+  if (catalog.OPTIONAL_FEATURES.length > 0) assert.match(html, /<details class="optional">/);
 });
 
 test("a feature that is not wired into the generator is never offered", async () => {

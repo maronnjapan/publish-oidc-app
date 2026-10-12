@@ -7,6 +7,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { EXPERIMENTAL_WIRING, generateOp, parseExperimentalSelection } from "../scripts/generate-op.mjs";
 import { bundle, readExperimentalCatalog, supportedFeatures } from "../scripts/lib.mjs";
+import { withCookieJar } from "./support/cookie-jar.mjs";
 import { MemoryD1, base64Url, signingEnvironment } from "./support/d1-mock.mjs";
 
 const config = {
@@ -38,7 +39,7 @@ async function buildWorker(opId, experimental) {
       const DB = new MemoryD1();
       await DB.addUser(opId, "alice", "password-123");
       const runtimeEnv = await signingEnvironment(issuer, opId, { ...config, op_id: opId }, DB, experimental);
-      return { DB, fetch: (request) => worker.default.fetch(request, runtimeEnv, context) };
+      return { DB, fetch: withCookieJar((request) => worker.default.fetch(request, runtimeEnv, context)) };
     },
   };
 }
@@ -86,10 +87,9 @@ async function pushAuthorizationRequest(fetchWorker, issuer, overrides = {}) {
 /** Drives login + consent for an authorization request that already reached /login. */
 async function completeLogin(fetchWorker, issuer, location) {
   const loginUrl = new URL(location, issuer);
-  const transactionId = loginUrl.searchParams.get("transaction_id");
   const csrfToken = (await (await fetchWorker(new Request(loginUrl))).text()).match(/name="csrf_token" value="([^"]+)"/)?.[1];
-  const login = await fetchWorker(new Request(`${issuer}/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ transaction_id: transactionId, csrf_token: csrfToken, username: "alice", password: "password-123" }) }));
-  const consent = await fetchWorker(new Request(new URL(login.headers.get("location"), issuer), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ transaction_id: transactionId, csrf_token: csrfToken, action: "approve" }) }));
+  const login = await fetchWorker(new Request(`${issuer}/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ csrf_token: csrfToken, username: "alice", password: "password-123" }) }));
+  const consent = await fetchWorker(new Request(new URL(login.headers.get("location"), issuer), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ csrf_token: csrfToken, action: "approve" }) }));
   return new URL(consent.headers.get("location"));
 }
 
@@ -199,7 +199,7 @@ test("optional mode still accepts a plain authorization request", async () => {
   for (const [name, value] of Object.entries({ response_type: "code", client_id: config.client_id, redirect_uri: config.redirect_url, scope: "openid", state: "plain", code_challenge: "x".repeat(43), code_challenge_method: "S256" })) authorizeUrl.searchParams.set(name, value);
   const response = await fetchWorker(new Request(authorizeUrl));
   assert.equal(response.status, 302);
-  assert.match(response.headers.get("location"), /\/login\?transaction_id=/);
+  assert.match(response.headers.get("location"), /\/login(\?|$)/);
 });
 
 test("the pushed endpoint authenticates the client and enforces the selected scopes", async () => {
@@ -660,7 +660,7 @@ test("rp-initiated-logout: a logout request shows a confirmation, and approving 
 
   // The form value alone is never accepted: the HttpOnly cookie has to come back with it, so
   // a forged cross-site POST fails. An allow list is empty by default, so there is no redirect.
-  const forged = await fetchWorker(new Request(`${logout.issuer}/logout/approve`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ csrf_token: csrfToken }) }));
+  const forged = await fetchWorker.raw(new Request(`${logout.issuer}/logout/approve`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ csrf_token: csrfToken }) }));
   assert.equal(forged.status, 400);
   assert.equal(forged.headers.get("location"), null);
 });
