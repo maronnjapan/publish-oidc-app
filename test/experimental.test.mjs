@@ -53,6 +53,7 @@ const idJag = await buildWorker("maronn-op-idjag12345678", { "id-jag": {} });
 const ciba = await buildWorker("maronn-op-ciba12345678", { ciba: {} });
 const jwtIntrospection = await buildWorker("maronn-op-jwtintro123", { "jwt-introspection-response": {} });
 const logout = await buildWorker("maronn-op-logout1234567", { "rp-initiated-logout": {} });
+const registration = await buildWorker("maronn-op-dcr12345678901", { "dynamic-client-registration": {} });
 
 /** Decodes a JWT's payload without verifying the signature (RS256 signing is CLI/package-owned and covered by its own conformance suite; this repository's wiring is what these tests exercise). */
 function decodeJwtPayload(jwt) {
@@ -96,7 +97,7 @@ async function completeLogin(fetchWorker, issuer, location) {
 test("the catalog only advertises features the CLI and the generator both know", async () => {
   const catalog = await readExperimentalCatalog();
   const supported = supportedFeatures(catalog);
-  assert.deepEqual(supported.map((feature) => feature.id).sort(), ["ciba", "device-authorization-grant", "id-jag", "jarm", "jwt-introspection-response", "par", "rp-initiated-logout", "token-exchange"]);
+  assert.deepEqual(supported.map((feature) => feature.id).sort(), ["ciba", "device-authorization-grant", "dynamic-client-registration", "id-jag", "jarm", "jwt-introspection-response", "par", "rp-initiated-logout", "token-exchange"]);
   const cliHelp = await readFile("node_modules/@maronn-openid-connect/cli/dist/features.js", "utf8");
   for (const feature of supported) {
     assert.match(feature.subpath, /^@maronn-openid-connect\/experimental\//);
@@ -663,4 +664,59 @@ test("rp-initiated-logout: a logout request shows a confirmation, and approving 
   const forged = await fetchWorker.raw(new Request(`${logout.issuer}/logout/approve`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ csrf_token: csrfToken }) }));
   assert.equal(forged.status, 400);
   assert.equal(forged.headers.get("location"), null);
+});
+
+const registrationRequest = (issuer, metadata) => new Request(`${issuer}/register`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(metadata) });
+
+test("dynamic-client-registration: discovery advertises registration_endpoint only when enabled", async () => {
+  const metadata = await (await (await registration.client()).fetch(new Request(`${registration.issuer}/.well-known/openid-configuration`))).json();
+  assert.equal(metadata.registration_endpoint, `${registration.issuer}/register`);
+
+  const { fetch: plainFetch } = await device.client();
+  const plainMetadata = await (await plainFetch(new Request(`${device.issuer}/.well-known/openid-configuration`))).json();
+  assert.equal("registration_endpoint" in plainMetadata, false);
+});
+
+test("dynamic-client-registration: a registered client is stored in the shared D1 and resolves on the next request", async () => {
+  const { DB, fetch: fetchWorker } = await registration.client();
+  const created = await fetchWorker(registrationRequest(registration.issuer, { redirect_uris: ["https://rp.example.com/callback"], client_name: "dcr test" }));
+  assert.equal(created.status, 201);
+  const body = await created.json();
+  assert.ok(body.client_id);
+  assert.equal(DB.kindsInUse().includes("dynamic-client:"), true, "the registration must live in oidc_records, not in isolate memory");
+
+  // The generated resolver wrapper must read the D1 store, not the module-level one: only a
+  // client the Worker can look up again reaches the login screen instead of an error page.
+  const authorize = await fetchWorker.raw(new Request(`${registration.issuer}/authorize?${new URLSearchParams({
+    response_type: "code",
+    client_id: body.client_id,
+    redirect_uri: "https://rp.example.com/callback",
+    scope: "openid",
+    state: "s",
+    code_challenge: "a".repeat(43),
+    code_challenge_method: "S256",
+  })}`));
+  assert.equal(authorize.status, 302);
+  assert.match(authorize.headers.get("location") ?? "", /\/login/);
+});
+
+test("dynamic-client-registration: a registered client is not visible to another OP", async () => {
+  const { fetch: fetchWorker } = await registration.client();
+  const created = await (await fetchWorker(registrationRequest(registration.issuer, { redirect_uris: ["https://rp.example.com/callback"] }))).json();
+  const other = await registration.client();
+  const authorize = await other.fetch.raw(new Request(`${registration.issuer}/authorize?${new URLSearchParams({
+    response_type: "code",
+    client_id: created.client_id,
+    redirect_uri: "https://rp.example.com/callback",
+    scope: "openid",
+    code_challenge: "a".repeat(43),
+    code_challenge_method: "S256",
+  })}`));
+  assert.notEqual(authorize.status, 302, "a different database must not know the client");
+});
+
+test("dynamic-client-registration: the endpoint does not exist unless the feature was selected", async () => {
+  const { fetch: plainFetch } = await device.client();
+  const response = await plainFetch.raw(registrationRequest(device.issuer, { redirect_uris: ["https://rp.example.com/callback"] }));
+  assert.equal(response.status, 404);
 });

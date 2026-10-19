@@ -29,7 +29,7 @@ await build({
   entryPoints: [path.join(generated.appDirectory, "src/oidc-provider/persistence.ts")],
   bundle: true, platform: "node", format: "esm", outfile: output,
 });
-const { createD1DeviceAuthorizationStore, createD1ParStore, createD1ProviderStores, createD1StoreBackend, createD1UserStore } =
+const { createD1DeviceAuthorizationStore, createD1DynamicClientStore, createD1ParStore, createD1ProviderStores, createD1StoreBackend, createD1UserStore } =
   await import(`${pathToFileURL(output).href}?${Date.now()}`);
 
 test("the backend namespaces every key by op_id and never stores the raw key", async () => {
@@ -158,4 +158,18 @@ test("a device authorization record round-trips through both its device_code and
   assert.equal(consumed.subject, "alice");
   assert.equal(await store.consume(record.deviceCode), null, "a device_code is single use");
   assert.equal(await store.findByUserCode(record.userCode), null, "the user_code index must not outlive the record it points to");
+});
+
+test("dynamic client registrations are scoped to their OP, never expire, and are counted per OP", async () => {
+  const DB = new MemoryD1();
+  const store = createD1DynamicClientStore(DB, "maronn-op-dcrstore0000");
+  const other = createD1DynamicClientStore(DB, "maronn-op-dcrstore1111");
+  assert.equal(await store.count(), 0);
+  await store.save({ clientId: "dcr-abc", redirectUris: ["https://rp.example.com/cb"] });
+  await other.save({ clientId: "dcr-def", redirectUris: ["https://rp.example.com/cb"] });
+  assert.equal((await store.get("dcr-abc")).clientId, "dcr-abc");
+  assert.equal(await store.get("dcr-def"), undefined, "another OP's registration must not resolve");
+  assert.equal(await store.count(), 1);
+  assert.equal([...DB.records.keys()].some((key) => key.includes("dcr-abc")), false, "the client id must not be stored in the clear as a key");
+  assert.equal([...DB.records.values()].every((row) => row.expires_at === null), true);
 });

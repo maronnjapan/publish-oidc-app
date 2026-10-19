@@ -155,6 +155,14 @@ const HELP_SECTIONS = {
   // to keep it out of unknownHelpHeadings(); standardScopesFromHelp() below reads the
   // "standard scopes (...)" parenthetical it embeds for the one thing worth tracking here.
   customScopes: /^Custom scopes \([^)\n]*\):/m,
+  // Two more headings that are not feature-id lists. They describe generation modes with
+  // their own flags: --flow replaces --enable / --disable / --scope / --db wholesale, and
+  // --db picks where the provider keeps its data. The portal deliberately offers neither
+  // (docs/cli-modes.md): persistence is the shared-D1 implementation in
+  // templates/cloudflare/persistence.ts, and a flow document would bypass the feature
+  // catalogs. Claimed here so they are a recorded decision rather than an unread heading.
+  flowDocuments: /^Flow documents \([^)\n]*\):/m,
+  database: /^Database \([^)\n]*\):/m,
 };
 
 /**

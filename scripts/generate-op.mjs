@@ -100,10 +100,12 @@ export const EXPERIMENTAL_WIRING = {
       // /authorize enforces the publisher's scope selection too, but a client that pushes
       // an unavailable scope should learn about it at push time rather than one redirect
       // later (RFC 9126 §2.1 validates as the authorization endpoint would).
+      // cli 0.13 made each step an exported function; validatePushedRequest() is the one that
+      // already holds the context and the pushed parameters.
       sources["routes/par.ts"] = replaceOnce(
         sources["routes/par.ts"],
-        "    const pushedParams = { ...params, client_id: clientId };",
-        "    const pushedParams = { ...params, client_id: clientId };\n\n    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = (pushedParams.scope ?? '').split(' ').filter((scope) => scope.length > 0 && !allowedScopes.includes(scope));\n    if (unsupportedScopes.length > 0) {\n      throw new ParError('invalid_scope', 'Unsupported scope: ' + unsupportedScopes.join(' '));\n    }",
+        "  await validatePushedAuthorizationParams(pushedParams, clientResolver, {",
+        "  // Enforce the scopes selected in the publisher UI.\n  const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n  const unsupportedScopes = (pushedParams['scope'] ?? '').split(' ').filter((scope) => scope.length > 0 && !allowedScopes.includes(scope));\n  if (unsupportedScopes.length > 0) {\n    throw new ParError('invalid_scope', 'Unsupported scope: ' + unsupportedScopes.join(' '));\n  }\n\n  await validatePushedAuthorizationParams(pushedParams, clientResolver, {",
         "generated routes/par.ts",
       );
       if (options.required) {
@@ -143,10 +145,12 @@ export const EXPERIMENTAL_WIRING = {
       // /device_authorization never goes through /authorize, so it has to enforce the
       // publisher's scope selection on its own — a client that asks for an unavailable
       // scope should learn about it at request time, same rationale as PAR above.
+      // The step function has no context, so the check goes right after it in the handler;
+      // the scope it returns has already had offline_access policy applied.
       sources["routes/device-authorization.ts"] = replaceOnce(
         sources["routes/device-authorization.ts"],
-        "    const requestedScope = validateDeviceAuthorizationScope(params['scope']);",
-        "    const requestedScope = validateDeviceAuthorizationScope(params['scope']);\n\n    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = requestedScope.filter((scope) => !allowedScopes.includes(scope));\n    if (unsupportedScopes.length > 0) {\n      throw new DeviceAuthorizationError('invalid_scope', 'Unsupported scope: ' + unsupportedScopes.join(' '));\n    }",
+        "    const scope = validateDeviceAuthorizationRequest(params, client);",
+        "    const scope = validateDeviceAuthorizationRequest(params, client);\n\n    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = scope.filter((value) => !allowedScopes.includes(value));\n    if (unsupportedScopes.length > 0) {\n      throw new DeviceAuthorizationError('invalid_scope', 'Unsupported scope: ' + unsupportedScopes.join(' '));\n    }",
         "generated routes/device-authorization.ts",
       );
     },
@@ -178,8 +182,8 @@ export const EXPERIMENTAL_WIRING = {
       // authorization above.
       sources["routes/backchannel-authentication.ts"] = replaceOnce(
         sources["routes/backchannel-authentication.ts"],
-        "    const response = await processBackchannelAuthenticationRequest({",
-        "    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = (params['scope'] ?? '').split(' ').filter((scope) => scope.length > 0 && !allowedScopes.includes(scope));\n    if (unsupportedScopes.length > 0) {\n      throw new BackchannelAuthenticationError('invalid_scope', 'Unsupported scope: ' + unsupportedScopes.join(' '));\n    }\n\n    const response = await processBackchannelAuthenticationRequest({",
+        "    validateCibaClientScope(params, client);",
+        "    validateCibaClientScope(params, client);\n\n    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = (params['scope'] ?? '').split(' ').filter((scope) => scope.length > 0 && !allowedScopes.includes(scope));\n    if (unsupportedScopes.length > 0) {\n      throw new BackchannelAuthenticationError('invalid_scope', 'Unsupported scope: ' + unsupportedScopes.join(' '));\n    }",
         "generated routes/backchannel-authentication.ts",
       );
     },
@@ -199,6 +203,47 @@ export const EXPERIMENTAL_WIRING = {
   // "Logged out" page and never redirects, until the generated OP is hand-edited.
   "rp-initiated-logout": {
     apply() {},
+  },
+  // RFC 7591 is generated whole by the CLI (routes/register.ts, the store contract and
+  // resolver wrapper in store.ts, registration_endpoint in Discovery). The generated store
+  // is in-memory, which on Workers would forget every registration on the next isolate, so
+  // the D1-backed one seeded into context wins (templates/cloudflare/index.ts). The resolver
+  // wrapper reads the module-level store rather than the context one, so it is given the
+  // per-request store explicitly. initialAccessToken stays unset (open registration, the
+  // CLI default); the per-OP maxRegisteredClients cap (100) bounds what one OP can store.
+  "dynamic-client-registration": {
+    apply(sources) {
+      sources["store.ts"] = replaceOnce(
+        sources["store.ts"],
+        "  Resolver extends { findClient(clientId: string): Promise<any> },\n>(base: Resolver): Resolver {",
+        "  Resolver extends { findClient(clientId: string): Promise<any> },\n>(base: Resolver, store: DynamicallyRegisteredClientStore = dynamicClientStore): Resolver {",
+        "generated store.ts",
+      );
+      sources["store.ts"] = replaceOnce(
+        sources["store.ts"],
+        "      return (await dynamicClientStore.get(clientId)) ?? null;",
+        "      return (await store.get(clientId)) ?? null;",
+        "generated store.ts",
+      );
+      sources["apply.ts"] = replaceOnce(
+        sources["apply.ts"],
+        "    const clientResolver = withDynamicallyRegisteredClients(\n      options.clientResolver ?? createInMemoryClientResolver(),\n    );",
+        "    const registeredClientStore = c.get('dynamicClientStore') ?? dynamicClientStore;\n    const clientResolver = withDynamicallyRegisteredClients(\n      options.clientResolver ?? createInMemoryClientResolver(),\n      registeredClientStore,\n    );",
+        "generated apply.ts",
+      );
+      sources["apply.ts"] = replaceOnce(
+        sources["apply.ts"],
+        "      ? withDynamicallyRegisteredClients(options.tokenClientResolver)",
+        "      ? withDynamicallyRegisteredClients(options.tokenClientResolver, registeredClientStore)",
+        "generated apply.ts",
+      );
+      sources["apply.ts"] = replaceOnce(
+        sources["apply.ts"],
+        "    c.set('dynamicClientStore', dynamicClientStore);",
+        "    c.set('dynamicClientStore', registeredClientStore);",
+        "generated apply.ts",
+      );
+    },
   },
 };
 
@@ -264,25 +309,19 @@ function replaceOnce(source, marker, replacement, description) {
  * Each one asserts its marker so a CLI upgrade that moves the ground under us fails the
  * build instead of silently producing an OP that ignores the publisher's choices.
  */
-function patchGeneratedSource(sources, { jarmEnabled }) {
-  const marker = "    // Create authentication transaction";
-  // EXPERIMENTAL (JARM Section 2.1): with --enable jarm, the CLI turns buildErrorRedirect
-  // into an async function that takes a leading `jarm` context argument (undefined for the
-  // plain query response). The marker itself does not move, so a naive patch keeps
-  // compiling against the pre-JARM signature and silently drops the `await` — this branch
-  // is what test/experimental.test.mjs's jarm coverage guards against.
+function patchGeneratedSource(sources) {
+  // cli 0.13 split the authorization endpoint into one exported function per step, so the
+  // publisher's scope selection is enforced inside validateAuthorizationRequestParams() by
+  // throwing the same AuthorizationError its own scope checks throw. authorizationErrorOutcome()
+  // then turns it into the redirectable error, including the signed JARM response when
+  // --enable jarm is on, so this patch no longer needs to know about JARM.
   //
   // Named disallowedScopes rather than unsupportedScopes: with --scope declared (see
-  // STANDARD_SCOPES above), the CLI's own generated code already declares a const
-  // `unsupportedScopes` earlier in this same function (scopes.ts's findUnsupportedScopes()),
-  // and esbuild rejects the duplicate declaration.
-  const errorRedirectCall = jarmEnabled
-    ? "await buildErrorRedirect(jarmResponse, validatedRequest.redirectUri, 'invalid_scope', validatedRequest.state, 'Unsupported scope: ' + disallowedScopes.join(' '), issuer)"
-    : "buildErrorRedirect(validatedRequest.redirectUri, 'invalid_scope', validatedRequest.state, 'Unsupported scope: ' + disallowedScopes.join(' '), issuer)";
+  // STANDARD_SCOPES above) the generated code may already declare that name in this scope.
   sources["routes/authorize.ts"] = replaceOnce(
     sources["routes/authorize.ts"],
-    marker,
-    `    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const disallowedScopes = validatedRequest.scope.filter((scope) => !allowedScopes.includes(scope));\n    if (disallowedScopes.length > 0) {\n      return { kind: 'authorization_response', location: ${errorRedirectCall} };\n    }\n\n${marker}`,
+    "  validateClientScope(scope, client.scope, redirectUri, state);\n",
+    "  validateClientScope(scope, client.scope, redirectUri, state);\n\n  // Enforce the scopes selected in the publisher UI.\n  const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n  const disallowedScopes = scope.filter((value) => !allowedScopes.includes(value));\n  if (disallowedScopes.length > 0) {\n    throw new AuthorizationError('invalid_scope', 'Unsupported scope: ' + disallowedScopes.join(' '), redirectUri, state);\n  }\n",
     "generated authorize.ts",
   );
 
@@ -392,7 +431,7 @@ export async function generateOp(opId, configPath) {
   const sources = Object.fromEntries(await Promise.all(
     patched.map(async (file) => [file, await readFile(path.join(providerDirectory, file), "utf8")]),
   ));
-  patchGeneratedSource(sources, { jarmEnabled: experimentalIds.includes("jarm") });
+  patchGeneratedSource(sources);
   for (const [ids, selection, wiringTable, kind, guide] of [
     [optionalIds, optional, OPTIONAL_WIRING, "optional", "docs/optional-features.md"],
     [experimentalIds, experimental, EXPERIMENTAL_WIRING, "experimental", "docs/experimental.md"],

@@ -18,6 +18,7 @@
 | `ciba` | CIBA（Client-Initiated Backchannel Authentication） | CIBA Core 1.0 | `POST /backchannel_authentication`、`GET,POST /ciba`、`POST /ciba/login`、`POST /ciba/approve` |
 | `jwt-introspection-response` | JWT Introspection Response | RFC 9701 | なし（既存の `POST /introspect` の応答形式を条件付きで変更） |
 | `rp-initiated-logout` | RP-Initiated Logout | OIDC RP-Initiated Logout 1.0 | `GET`/`POST /logout`、`POST /logout/approve`、Discoveryの `end_session_endpoint` |
+| `dynamic-client-registration` | Dynamic Client Registration | RFC 7591 | `POST /register`、Discoveryの `registration_endpoint` |
 
 CLI（`@maronn-openid-connect/cli`）がこれらの機能を自前で生成します。このリポジトリは選択内容を `--enable <feature-id>` として渡すだけで、ルート実装やDiscoveryメタデータは書きません。
 
@@ -97,6 +98,14 @@ CLI（`@maronn-openid-connect/cli`）がこれらの機能を自前で生成し�
 - Discoveryに `end_session_endpoint` が追加されます。
 - 生成コードの `rpInitiatedLogoutConfig.postLogoutRedirectUris` は**空のまま**です（fail safe）。ログアウトは常にOP自身の「ログアウトしました」画面で終わり、`post_logout_redirect_uri` へはリダイレクトしません。RPへ戻したい場合は、生成されたOPの `routes/logout.ts` を手で編集してください（ポータルからは指定できません）。
 - 新しい永続化は不要です。終了させるのは既存のブラウザセッションレコードで、共有D1のストアがそのまま扱います。CLIが自己完結で生成するため、`EXPERIMENTAL_WIRING['rp-initiated-logout']` のエントリは空の `apply()` です。
+
+### `dynamic-client-registration`
+
+- `POST /register` にJSONでメタデータを送ると `client_id`（機密クライアントなら `client_secret` も）が発行され、すぐに `/authorize` と `/token` で使えます。Discoveryに `registration_endpoint` が追加されます。
+- 登録は**認証なし（open registration）**です。生成コードの `initialAccessToken` は未設定のままで、ポータルからは指定できません。代わりに1つのOPあたり `maxRegisteredClients`（既定100件）で打ち止めになり、超えると429を返します。
+- 登録済みクライアントは共有D1の `oidc_records`（`kind = dynamic-client:`、期限なし）に保存します（`templates/cloudflare/persistence.ts` の `createD1DynamicClientStore`）。生成コードの既定はインメモリで、Workersではisolateごとに消えてしまうため、`templates/cloudflare/index.ts` が毎リクエスト差し込むD1版を使います。Reaperの `op_id` 単位の削除にそのまま乗ります。
+- 生成される `withDynamicallyRegisteredClients()` は既定でモジュール内のストアを読むため、`EXPERIMENTAL_WIRING['dynamic-client-registration']` が `apply.ts` / `store.ts` を書き換えてリクエストごとのストアを渡します。このパッチが欠けると、登録は成功するのに次のリクエストで `client_id` が解決できなくなります（`test/experimental.test.mjs` が検査します）。
+- RFC 7592（登録の更新・削除）は実装されていません。
 
 選択内容は生成時に `src/index.ts` の `EXPERIMENTAL_FEATURES` へ直接埋め込みます。Worker変数として渡すと、あとから消えたり書き換わったりしたときに「PAR必須」のような設定が黙って緩む（fail open）ためです。
 

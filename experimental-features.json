@@ -217,6 +217,31 @@
         "end_session_endpoint"
       ],
       "options": []
+    },
+    {
+      "id": "dynamic-client-registration",
+      "status": "supported",
+      "subpath": "@maronn-openid-connect/experimental/dynamic-client-registration",
+      "label": "Dynamic Client Registration",
+      "spec": "RFC 7591",
+      "summary": "POST /register にクライアントのメタデータをJSONで送ると、client_id（機密クライアントなら client_secret も）が発行され、すぐに /authorize と /token で使えます。登録は認証なしで受け付け、1つのOPあたり100件までに制限されます。登録済みクライアントは共有D1に保存されます。",
+      "links": [
+        {
+          "label": "RFC 7591",
+          "url": "https://datatracker.ietf.org/doc/html/rfc7591"
+        },
+        {
+          "label": "このリポジトリでの実装メモ",
+          "doc": "docs/experimental.md"
+        }
+      ],
+      "endpoints": [
+        "POST /register"
+      ],
+      "discovery": [
+        "registration_endpoint"
+      ],
+      "options": []
     }
   ]
 }

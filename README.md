@@ -164,6 +164,7 @@ Discoveryは各OPの`/.well-known/openid-configuration`、JWKSは`/.well-known/j
 | `ciba` | CIBA（Client-Initiated Backchannel Authentication） | CIBA Core 1.0 | `POST /backchannel_authentication`、`/ciba`ほか |
 | `jwt-introspection-response` | JWT Introspection Response | RFC 9701 | なし（`POST /introspect`の応答形式を条件付きで変更） |
 | `rp-initiated-logout` | RP-Initiated Logout | OIDC RP-Initiated Logout 1.0 | `/logout`、`POST /logout/approve` |
+| `dynamic-client-registration` | Dynamic Client Registration | RFC 7591 | `POST /register` |
 
 **これらはAPIが安定しておらず、他の機能より適切に動作しない可能性が高い**ため、動作検証用途に限ってください。マイナーリリースでも破壊的変更や削除が起こり得ます。同じ注記を作成画面と作成完了画面にも表示します。
 

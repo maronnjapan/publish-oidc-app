@@ -177,3 +177,9 @@ test("the opt-in catalogs stay readable and mutually exclusive", async () => {
   assert.deepEqual(optionalIds.filter((id) => experimentalIds.includes(id)), []);
   assert.deepEqual(extensionIds.filter((id) => optionalIds.includes(id) || experimentalIds.includes(id)), []);
 });
+
+test("the Flow documents and Database headings are claimed as generation modes, not toggle groups", () => {
+  const help = `${CLI_HELP}\n\nFlow documents (graph / --flow): edit the JSON and generate from it.\n\nDatabase (--db sql | --db kv): keep the data in your database.\n`;
+  assert.deepEqual(helpGroupHeadings(help).slice(-2), ["Flow documents (graph / --flow)", "Database (--db sql | --db kv)"]);
+  assert.deepEqual(unknownHelpHeadings(help), []);
+});
