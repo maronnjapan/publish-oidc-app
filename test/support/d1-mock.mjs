@@ -32,6 +32,14 @@ export class MemoryD1 {
               await Promise.resolve();
               return database.#live(row) ? row : null;
             }
+            if (sql.includes("COUNT(*)") && sql.includes("FROM oidc_records")) {
+              let total = 0;
+              for (const [key, row] of database.records) {
+                const [opId, kind] = key.split("|");
+                if (opId === params[0] && kind === params[1] && database.#live(row)) total += 1;
+              }
+              return { total };
+            }
             if (sql.includes("FROM oidc_records")) {
               const row = database.records.get(database.#recordKey(params)) ?? null;
               return row ? { value_json: row.value_json, expires_at: row.expires_at } : null;

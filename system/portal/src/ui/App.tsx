@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useState } from "preact/hooks";
-import { EXPERIMENTAL_FEATURES, OPTIONAL_FEATURES, choiceItems } from "../shared/catalog";
-import { type FeatureName, REQUIRED_SCOPE } from "../shared/rules";
+import { EXPERIMENTAL_FEATURES, EXTENSION_FEATURES, OPTIONAL_FEATURES, choiceItems } from "../shared/catalog";
+import { CUSTOM_SCOPE_MAX_LENGTH, type FeatureName, MAX_CUSTOM_SCOPES, REQUIRED_SCOPE } from "../shared/rules";
 import { formReducer, initialFormState, scopeDisabled } from "./form-state";
 import { type PortalApi, browserApi } from "./api";
 import { type Clock, createOp, loadQuota } from "./submit";
@@ -8,7 +8,7 @@ import { formErrors } from "./validation";
 import { AppSettingsCard } from "./components/AppSettingsCard";
 import { ChoiceCard } from "./components/ChoiceCard";
 import { CommunityLauncher } from "./components/CommunityLauncher";
-import { Hint } from "./components/Hints";
+import { FieldError, Hint } from "./components/Hints";
 import { OptInCard } from "./components/OptInCard";
 import { SubmitCard } from "./components/SubmitCard";
 import { UsersCard } from "./components/UsersCard";
@@ -68,7 +68,26 @@ export function App({ api = browserApi, clock }: { api?: PortalApi; clock?: Cloc
             checked={(item) => item.id === REQUIRED_SCOPE || state.scopes[item.id] === true}
             disabled={(item) => scopeDisabled(state, item.id)}
             onToggle={(item, value) => dispatch({ type: "toggle-scope", id: item.id, value })}
-          />
+          >
+            <div class="choice">
+              <label class="block" for="custom-scopes">
+                カスタムスコープ（任意）
+              </label>
+              <input
+                id="custom-scopes"
+                autocomplete="off"
+                placeholder="reports.read, reports.write"
+                value={state.customScopesText}
+                onInput={(event) => dispatch({ type: "set-custom-scopes", value: event.currentTarget.value })}
+              />
+              <FieldError message={errors.customScopes} show={state.showErrors} />
+              <Hint links={[{ label: "RFC 6749 §3.3", url: "https://datatracker.ietf.org/doc/html/rfc6749#section-3.3" }]}>
+                標準の6スコープ以外にこのOPが受け付けるスコープを、カンマまたは空白区切りで最大{MAX_CUSTOM_SCOPES}
+                件まで宣言できます（半角小文字英数字と . _ - のみ、1〜{CUSTOM_SCOPE_MAX_LENGTH}
+                文字）。宣言したスコープはこのOPの全クライアントに自動で許可され、End-Userごとの絞り込みは生成後のscopes.tsを編集してください。
+              </Hint>
+            </div>
+          </ChoiceCard>
 
           <ChoiceCard
             group="feature"
@@ -86,7 +105,7 @@ export function App({ api = browserApi, clock }: { api?: PortalApi; clock?: Cloc
             <Hint>publicクライアントはライブラリの安全ポリシーにより、PKCE設定をオフにしてもPKCEが必須です。</Hint>
           </ChoiceCard>
 
-          <OptInCard group="optional" features={OPTIONAL_FEATURES} state={state} dispatch={dispatch}>
+          <OptInCard group="optional" features={OPTIONAL_FEATURES} state={state} errors={errors} dispatch={dispatch}>
             {(toggles) => (
               <details class="optional">
                 <summary>オプション機能（デフォルト無効・{OPTIONAL_FEATURES.length}件）</summary>
@@ -98,7 +117,19 @@ export function App({ api = browserApi, clock }: { api?: PortalApi; clock?: Cloc
             )}
           </OptInCard>
 
-          <OptInCard group="experimental" features={EXPERIMENTAL_FEATURES} state={state} dispatch={dispatch}>
+          <OptInCard group="extension" features={EXTENSION_FEATURES} state={state} errors={errors} dispatch={dispatch}>
+            {(toggles) => (
+              <details class="optional extension">
+                <summary>拡張機能（デフォルト無効・{EXTENSION_FEATURES.length}件）</summary>
+                <Hint>
+                  外部サービスとの連携です。CLIが標準で持つ安定した機能なので試験的な機能とは別枠ですが、連携先での設定（クライアントIDの発行やリダイレクトURIの登録）が要るため既定では無効です。必要なときだけ有効にしてください。
+                </Hint>
+                {toggles}
+              </details>
+            )}
+          </OptInCard>
+
+          <OptInCard group="experimental" features={EXPERIMENTAL_FEATURES} state={state} errors={errors} dispatch={dispatch}>
             {(toggles) => (
               <fieldset>
                 <legend>試験的な機能（@maronn-openid-connect/experimental）</legend>

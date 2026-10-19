@@ -48,7 +48,6 @@ async function buildWorker(opId, optional) {
   };
 }
 
-const bound = await buildWorker("maronn-op-bound1234567", { "transaction-binding": {} });
 const unbound = await buildWorker("maronn-op-unbound12345", {});
 
 /** Starts an authorization request and returns what a browser would hold afterwards. */
@@ -63,7 +62,6 @@ async function startFlow(fetchWorker, issuer, state) {
     verifier,
     response,
     loginUrl: new URL(location, issuer),
-    transactionId: new URL(location, issuer).searchParams.get("transaction_id"),
     cookie: (response.headers.get("set-cookie") ?? "").split(";")[0] ?? "",
   };
 }
@@ -75,7 +73,7 @@ function csrfFrom(html) {
 test("the catalog only advertises optional features the CLI and the generator both know", async () => {
   const catalog = await readOptionalCatalog();
   const supported = supportedFeatures(catalog);
-  assert.deepEqual(supported.map((feature) => feature.id).sort(), ["transaction-binding"]);
+  assert.deepEqual(supported.map((feature) => feature.id).sort(), []);
   const cliFeatures = await readFile("node_modules/@maronn-openid-connect/cli/dist/features.js", "utf8");
   for (const feature of supported) {
     // The portal offers whatever is `supported`. Without matching wiring — and without
@@ -107,89 +105,52 @@ test("every toggle group the pinned CLI prints is one this repository reads", as
 });
 
 test("optional selections are validated against the catalog", async () => {
-  const catalog = await readOptionalCatalog();
-  assert.deepEqual(parseOptionalSelection({ "transaction-binding": {} }, catalog), { "transaction-binding": {} });
+  // The real catalog is empty right now, so the validation machinery is exercised with a
+  // synthetic one: the next optional feature must behave the same way.
+  const catalog = { features: [{ id: "example-hardening", status: "supported", options: [{ id: "strict", default: false }] }, { id: "pending", status: "detected" }] };
+  assert.deepEqual(parseOptionalSelection({ "example-hardening": {} }, catalog), { "example-hardening": { strict: false } });
   assert.deepEqual(parseOptionalSelection(undefined, catalog), {});
   assert.throws(() => parseOptionalSelection({ par: {} }, catalog), /optional feature "par" is not supported/);
-  assert.throws(() => parseOptionalSelection({ "transaction-binding": { nope: true } }, catalog), /optional option "transaction-binding.nope" is not supported/);
+  assert.throws(() => parseOptionalSelection({ pending: {} }, catalog), /optional feature "pending" is not supported/);
+  assert.throws(() => parseOptionalSelection({ "example-hardening": { nope: true } }, catalog), /optional option "example-hardening.nope" is not supported/);
   assert.throws(() => parseOptionalSelection([], catalog), /optional selection must be an object/);
 });
 
-test("an OP without optional features keeps the plain authorization flow", async () => {
+test("the transaction binding that used to be optional is now the default flow", async () => {
   const { fetch: fetchWorker } = await unbound.client();
   const flow = await startFlow(fetchWorker, unbound.issuer, "plain");
 
   assert.equal(flow.response.status, 302);
-  assert.equal(flow.response.headers.get("set-cookie"), null, "no binding cookie is issued when the feature is off");
+  // cli 0.11.0 made the cookie binding standard: the transaction id never appears in the URL.
+  assert.equal(flow.loginUrl.searchParams.get("transaction_id"), null);
+  assert.match(flow.response.headers.get("set-cookie") ?? "", /^__Host-oidc_txn=[^;]+; HttpOnly; Secure; SameSite=Lax/);
   assert.deepEqual(JSON.parse(await readFile(path.join(unbound.generated.appDirectory, "op.json"), "utf8")).optional, {});
 
-  // Without the feature the login form is reachable with the transaction id alone.
-  const loginPage = await fetchWorker(new Request(flow.loginUrl));
-  assert.equal(loginPage.status, 200);
-  assert.ok(csrfFrom(await loginPage.text()));
-});
-
-test("transaction binding issues a per-transaction cookie and rejects other browsers", async () => {
-  const { fetch: fetchWorker } = await bound.client();
-  const flow = await startFlow(fetchWorker, bound.issuer, "bound");
-
-  assert.equal(flow.response.status, 302);
-  assert.ok(flow.cookie.startsWith(`oidc_txn_${flow.transactionId}=`), `unexpected binding cookie: ${flow.cookie}`);
-  assert.match(flow.response.headers.get("set-cookie"), /HttpOnly; Secure; SameSite=Lax/);
-  // Only the hash is kept server side, so a leaked transaction record is not a usable cookie.
-  const secret = flow.cookie.slice(flow.cookie.indexOf("=") + 1);
-  assert.ok(secret.length > 0);
-
-  // The CSRF token lives in this HTML: a caller holding only the transaction id must not read it.
+  // The CSRF token lives in the login HTML: a browser without the cookie must not read it.
   const withoutCookie = await fetchWorker(new Request(flow.loginUrl));
   assert.equal(withoutCookie.status, 400);
   assert.equal(csrfFrom(await withoutCookie.text()), "");
-
   const withCookie = await fetchWorker(new Request(flow.loginUrl, { headers: { Cookie: flow.cookie } }));
   assert.equal(withCookie.status, 200);
   assert.ok(csrfFrom(await withCookie.text()));
 });
 
-test("transaction binding still completes the authorization code flow for the owning browser", async () => {
-  const { fetch: fetchWorker } = await bound.client();
-  const flow = await startFlow(fetchWorker, bound.issuer, "bound-happy");
-  const headers = { "content-type": "application/x-www-form-urlencoded", Cookie: flow.cookie };
-  const csrfToken = csrfFrom(await (await fetchWorker(new Request(flow.loginUrl, { headers: { Cookie: flow.cookie } }))).text());
-
-  const login = await fetchWorker(new Request(`${bound.issuer}/login`, { method: "POST", headers, body: new URLSearchParams({ transaction_id: flow.transactionId, csrf_token: csrfToken, username: "alice", password: "password-123" }) }));
-  assert.equal(login.status, 302, await login.clone().text());
-
-  const consentUrl = new URL(login.headers.get("location"), bound.issuer);
-  const consentCsrf = csrfFrom(await (await fetchWorker(new Request(consentUrl, { headers: { Cookie: flow.cookie } }))).text());
-  const consent = await fetchWorker(new Request(`${bound.issuer}/consent`, { method: "POST", headers, body: new URLSearchParams({ transaction_id: flow.transactionId, csrf_token: consentCsrf, action: "approve" }) }));
-  const callback = new URL(consent.headers.get("location"));
-  const code = callback.searchParams.get("code");
-  assert.ok(code, `no authorization code in ${callback}`);
-  assert.equal(callback.searchParams.get("state"), "bound-happy");
-
-  const tokenResponse = await fetchWorker(new Request(`${bound.issuer}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: config.redirect_url, client_id: config.client_id, client_secret: config.client_secret, code_verifier: flow.verifier }) }));
-  assert.equal(tokenResponse.status, 200, await tokenResponse.clone().text());
-  assert.ok((await tokenResponse.json()).access_token);
+test("the retired transaction-binding id is refused rather than silently ignored", async () => {
+  const catalog = await readOptionalCatalog();
+  assert.throws(() => parseOptionalSelection({ "transaction-binding": {} }, catalog), /optional feature "transaction-binding" is not supported/);
 });
 
-test("another transactions binding cookie cannot approve consent", async () => {
-  const { fetch: fetchWorker } = await bound.client();
-  const victim = await startFlow(fetchWorker, bound.issuer, "victim");
-  const victimHeaders = { "content-type": "application/x-www-form-urlencoded", Cookie: victim.cookie };
-  const csrfToken = csrfFrom(await (await fetchWorker(new Request(victim.loginUrl, { headers: { Cookie: victim.cookie } }))).text());
-  const login = await fetchWorker(new Request(`${bound.issuer}/login`, { method: "POST", headers: victimHeaders, body: new URLSearchParams({ transaction_id: victim.transactionId, csrf_token: csrfToken, username: "alice", password: "password-123" }) }));
-  const consentUrl = new URL(login.headers.get("location"), bound.issuer);
-  const consentCsrf = csrfFrom(await (await fetchWorker(new Request(consentUrl, { headers: { Cookie: victim.cookie } }))).text());
-
-  // The attacker holds a perfectly valid binding cookie - for their own transaction.
-  const attacker = await startFlow(fetchWorker, bound.issuer, "attacker");
-  const response = await fetchWorker(new Request(`${bound.issuer}/consent`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", Cookie: attacker.cookie },
-    body: new URLSearchParams({ transaction_id: victim.transactionId, csrf_token: consentCsrf, action: "approve" }),
-  }));
-
-  // Stopped by the OP, never redirected onward with a code for the victim's identity.
-  assert.equal(response.status, 400);
-  assert.equal(response.headers.get("location"), null);
+test("a scope the publisher did not select is refused at /authorize with a redirected invalid_scope", async () => {
+  // Regression: since the CLI split routes/authorize.ts from its page layer, the scope
+  // enforcement patch has to return an authorization_response outcome rather than call
+  // c.redirect(), or the refusal is mistaken for a normal outcome and the request fails.
+  const { fetch: fetchWorker } = await unbound.client();
+  const authorizeUrl = new URL(`${unbound.issuer}/authorize`);
+  for (const [name, value] of Object.entries({ response_type: "code", client_id: config.client_id, redirect_uri: config.redirect_url, scope: "openid address", state: "scope-state", code_challenge: "x".repeat(43), code_challenge_method: "S256" })) authorizeUrl.searchParams.set(name, value);
+  const response = await fetchWorker(new Request(authorizeUrl));
+  assert.equal(response.status, 302);
+  const location = new URL(response.headers.get("location"));
+  assert.equal(`${location.origin}${location.pathname}`, config.redirect_url);
+  assert.equal(location.searchParams.get("error"), "invalid_scope");
+  assert.equal(location.searchParams.get("state"), "scope-state");
 });

@@ -1,0 +1,48 @@
+{
+  "package": "@maronn-openid-connect/cli",
+  "note": "CLIの \"Extension features (disabled by default):\" が持つ機能のカタログ。連携先ごとに別packageを持つ統合（現在はgoogle-loginのみ）で、既定では無効です。ポータルUI・生成スクリプト・追従チェックが共通で参照する単一の情報源です。optional-features.json と同じ形ですが、1) 各機能が package に自分のnpm packageを持つ、2) options に type:\"text\"（pattern必須の入力欄）を持てる、3) after_create に作成完了画面へ出す連携先での設定手順を書ける、点が異なります。status が supported の機能だけがポータルUIに表示されます。scripts/check-package-updates.mjs が --help の該当行に新しいIDを見つけると status: detected として追記します（配線手順は docs/extension-features.md）。",
+  "features": [
+    {
+      "id": "google-login",
+      "status": "supported",
+      "package": "@maronn-openid-connect/google-login",
+      "label": "Googleでログイン",
+      "spec": "Google Identity Services（リダイレクトモード）",
+      "summary": "ログイン画面に「Sign in with Google」ボタンを追加し、Googleが /login/google へPOSTするIDトークンを検証してログインさせます。パスワードのログインも残ります。",
+      "links": [
+        {
+          "label": "Sign in with Google（リダイレクトモード）",
+          "url": "https://developers.google.com/identity/gsi/web/guides/client-library"
+        },
+        {
+          "label": "IDトークンの検証",
+          "url": "https://developers.google.com/identity/gsi/web/guides/verify-google-id-token"
+        },
+        {
+          "label": "このリポジトリでの実装メモ",
+          "doc": "docs/extension-features.md"
+        }
+      ],
+      "endpoints": [
+        "POST /login/google"
+      ],
+      "options": [
+        {
+          "id": "clientId",
+          "type": "text",
+          "label": "GoogleのOAuthクライアントID",
+          "pattern": "^[A-Za-z0-9._-]{1,200}\\.apps\\.googleusercontent\\.com$",
+          "placeholder": "123456789012-xxxx.apps.googleusercontent.com",
+          "hint": "Google Cloud consoleで「ウェブ アプリケーション」として作成したクライアントのIDです（秘密情報ではありません）。作成後に、OPのURL + /login/google を「承認済みのリダイレクトURI」へ、OPのURLを「承認済みのJavaScript生成元」へ登録してください。"
+        },
+        {
+          "id": "requireVerifiedEmail",
+          "label": "メールアドレスが確認済みのGoogleアカウントだけ受け付ける",
+          "default": false,
+          "hint": "有効にすると email_verified が true でないIDトークンを拒否します。"
+        }
+      ],
+      "after_create": "Google Cloud consoleの該当クライアントで、「承認済みのリダイレクトURI」に {op_url}/login/google を、「承認済みのJavaScript生成元」に {op_url} を登録してください。登録するまでGoogleのボタンは動作しません。"
+    }
+  ]
+}
