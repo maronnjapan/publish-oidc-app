@@ -21,7 +21,7 @@ const config = {
   client_id: "client_ext123456789",
   client_secret: "extension-secret-long-enough-for-testing",
   scopes: ["openid", "profile", "email"],
-  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true },
+  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
 };
 
 const GOOGLE_CLIENT_ID = "1234567890-testclient.apps.googleusercontent.com";
@@ -112,7 +112,7 @@ test("the catalog only advertises extension features the CLI and the generator b
   const catalog = await readExtensionCatalog();
   const supported = supportedFeatures(catalog);
   assert.deepEqual(supported.map((feature) => feature.id).sort(), ["google-login"]);
-  const cliFeatures = await readFile("node_modules/@maronn-openid-connect/cli/dist/features.js", "utf8");
+  const cliFeatures = await readFile("node_modules/@maronn-openid-connect/cli/dist/registry.js", "utf8");
   const rootPackage = JSON.parse(await readFile("package.json", "utf8"));
   for (const feature of supported) {
     assert.ok(Object.prototype.hasOwnProperty.call(EXTENSION_WIRING, feature.id), `${feature.id} has no EXTENSION_WIRING entry (docs/extension-features.md)`);
@@ -169,10 +169,12 @@ test("a verified Google account signs in, is provisioned in D1, and completes th
   const tokens = await (await flow.fetchWorker(new Request(`${google.issuer}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: config.redirect_url, client_id: config.client_id, client_secret: config.client_secret, code_verifier: flow.verifier }) }))).json();
   assert.ok(tokens.access_token, JSON.stringify(tokens));
 
-  // The subject is the Google `sub` behind a prefix no portal username can contain, and
-  // UserInfo returns exactly what Google asserted — read back from D1, not from memory.
+  // The CLI's user store mints a random UUID subject per Google `sub` (a portal username can
+  // never equal one), and UserInfo returns exactly what Google asserted — read back from D1,
+  // not from memory.
   const userinfo = await (await flow.fetchWorker(new Request(`${google.issuer}/userinfo`, { headers: { authorization: `Bearer ${tokens.access_token}` } }))).json();
-  assert.equal(userinfo.sub, `google:${GOOGLE_SUB}`);
+  assert.match(userinfo.sub, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.notEqual(userinfo.sub, GOOGLE_SUB, "the Google sub is not exposed as the OP subject");
   assert.equal(userinfo.name, "John Smith");
   assert.equal(userinfo.email, "jsmith@example.com");
 });

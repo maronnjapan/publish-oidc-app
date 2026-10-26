@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { OP_ID_PATTERN, ROOT, readExperimentalCatalog, readExtensionCatalog, readOptionalCatalog, supportedFeatures } from "./lib.mjs";
 
 const execFile = promisify(execFileCallback);
-const FEATURES = ["pkce", "refresh-token", "introspection", "revocation", "request-object"];
+const FEATURES = ["pkce", "refresh-token", "introspection", "revocation", "request-object", "form-post-response-mode", "implicit-flow", "hybrid-flow"];
 
 /**
  * The scopes @maronn-openid-connect/core handles itself; anything else in config.scopes is
@@ -90,30 +90,36 @@ export const EXPERIMENTAL_WIRING = {
   par: {
     apply(sources, options) {
       // The generated PAR store is in-memory. Let the D1-backed one that the Worker
-      // entrypoint seeds into context win (templates/cloudflare/index.ts).
-      sources["apply.ts"] = replaceOnce(
-        sources["apply.ts"],
-        "    c.set('parStore', parStore);",
-        "    c.set('parStore', c.get('parStore') ?? parStore);",
-        "generated apply.ts",
+      // entrypoint seeds into context win (templates/cloudflare/index.ts). A feature's context
+      // hook runs inside the generated app and replaces what was set before it, so the
+      // preference has to be written into the hook itself.
+      sources["features/par/feature.ts"] = replaceOnce(
+        sources["features/par/feature.ts"],
+        "  context: { parStore },",
+        "  context: ({ c }) => ({ parStore: c.get('parStore') ?? parStore }),",
+        "generated features/par/feature.ts",
       );
       // /authorize enforces the publisher's scope selection too, but a client that pushes
       // an unavailable scope should learn about it at push time rather than one redirect
       // later (RFC 9126 §2.1 validates as the authorization endpoint would).
-      // cli 0.13 made each step an exported function; validatePushedRequest() is the one that
-      // already holds the context and the pushed parameters.
-      sources["routes/par.ts"] = replaceOnce(
-        sources["routes/par.ts"],
+      sources["features/par/endpoints/par/steps/validate-request.ts"] = replaceOnce(
+        sources["features/par/endpoints/par/steps/validate-request.ts"],
+        "import { validatePushedAuthorizationParams } from",
+        "import { ParError, validatePushedAuthorizationParams } from",
+        "generated par validate-request.ts",
+      );
+      sources["features/par/endpoints/par/steps/validate-request.ts"] = replaceOnce(
+        sources["features/par/endpoints/par/steps/validate-request.ts"],
         "  await validatePushedAuthorizationParams(pushedParams, clientResolver, {",
         "  // Enforce the scopes selected in the publisher UI.\n  const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n  const unsupportedScopes = (pushedParams['scope'] ?? '').split(' ').filter((scope) => scope.length > 0 && !allowedScopes.includes(scope));\n  if (unsupportedScopes.length > 0) {\n    throw new ParError('invalid_scope', 'Unsupported scope: ' + unsupportedScopes.join(' '));\n  }\n\n  await validatePushedAuthorizationParams(pushedParams, clientResolver, {",
-        "generated routes/par.ts",
+        "generated par validate-request.ts",
       );
       if (options.required) {
-        sources["routes/par.ts"] = replaceOnce(
-          sources["routes/par.ts"],
+        sources["features/par/config.ts"] = replaceOnce(
+          sources["features/par/config.ts"],
           "  requirePushedAuthorizationRequests: false,",
           "  requirePushedAuthorizationRequests: true,",
-          "generated routes/par.ts",
+          "generated features/par/config.ts",
         );
       }
     },
@@ -124,11 +130,10 @@ export const EXPERIMENTAL_WIRING = {
     apply() {},
   },
   jarm: {
-    // JARM is generated whole by the CLI (routes/jarm.ts, and a JWT-aware authorize.ts /
-    // consent.ts). The one repository-owned adjustment it touches — keeping the scope
-    // enforcement patch below JARM-aware — applies to every OP regardless of which
-    // experimental features are selected, so patchGeneratedSource() handles it once
-    // instead of here.
+    // JARM is generated whole by the CLI (features/jarm/ and the response-mode hooks of
+    // /authorize and /consent). The scope enforcement patch below throws the same
+    // AuthorizationError the CLI's own checks do, so the CLI turns it into the signed
+    // response itself and nothing here needs to know about JARM.
     apply() {},
   },
   "device-authorization-grant": {
@@ -136,26 +141,33 @@ export const EXPERIMENTAL_WIRING = {
       // The generated device authorization store is in-memory. Let the D1-backed one that
       // the Worker entrypoint seeds into context win (templates/cloudflare/index.ts), same
       // as the PAR store above.
-      sources["apply.ts"] = replaceOnce(
-        sources["apply.ts"],
-        "    c.set('deviceAuthorizationStore', deviceAuthorizationStore);",
-        "    c.set('deviceAuthorizationStore', c.get('deviceAuthorizationStore') ?? deviceAuthorizationStore);",
-        "generated apply.ts",
+      sources["features/device-authorization-grant/feature.ts"] = replaceOnce(
+        sources["features/device-authorization-grant/feature.ts"],
+        "  context: { deviceAuthorizationStore },",
+        "  context: ({ c }) => ({ deviceAuthorizationStore: c.get('deviceAuthorizationStore') ?? deviceAuthorizationStore }),",
+        "generated features/device-authorization-grant/feature.ts",
       );
       // /device_authorization never goes through /authorize, so it has to enforce the
       // publisher's scope selection on its own — a client that asks for an unavailable
       // scope should learn about it at request time, same rationale as PAR above.
       // The step function has no context, so the check goes right after it in the handler;
       // the scope it returns has already had offline_access policy applied.
-      sources["routes/device-authorization.ts"] = replaceOnce(
-        sources["routes/device-authorization.ts"],
+      const devicePipeline = "features/device-authorization-grant/endpoints/device-authorization/pipeline.ts";
+      sources[devicePipeline] = replaceOnce(
+        sources[devicePipeline],
+        "import { Hono } from 'hono';\n",
+        "import { Hono } from 'hono';\nimport { DeviceAuthorizationError } from '@maronn-openid-connect/experimental/device-authorization-grant';\n",
+        "generated device-authorization pipeline.ts",
+      );
+      sources[devicePipeline] = replaceOnce(
+        sources[devicePipeline],
         "    const scope = validateDeviceAuthorizationRequest(params, client);",
         "    const scope = validateDeviceAuthorizationRequest(params, client);\n\n    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = scope.filter((value) => !allowedScopes.includes(value));\n    if (unsupportedScopes.length > 0) {\n      throw new DeviceAuthorizationError('invalid_scope', 'Unsupported scope: ' + unsupportedScopes.join(' '));\n    }",
-        "generated routes/device-authorization.ts",
+        "generated device-authorization pipeline.ts",
       );
     },
   },
-  // ID-JAG (Cross-App Access) is generated whole by the CLI, entirely inside routes/token.ts.
+  // ID-JAG (Cross-App Access) is generated whole by the CLI (features/id-jag/ and the token endpoint's grant hooks).
   // Both allowedAudiences (issuance) and trustedIdentityProviders (redemption) stay empty
   // (fail safe): every request is rejected until the generated OP's idJagConfig is hand-edited,
   // same rationale as token-exchange's allowedTargets. The portal only has to register the
@@ -169,34 +181,41 @@ export const EXPERIMENTAL_WIRING = {
       // The generated CIBA stores are in-memory. Let the D1-backed ones that the Worker
       // entrypoint seeds into context win (templates/cloudflare/index.ts), same as PAR
       // and the device authorization grant above.
-      sources["apply.ts"] = replaceOnce(
-        sources["apply.ts"],
-        "    c.set('cibaAuthenticationRequestStore', cibaAuthenticationRequestStore);\n    c.set('cibaLoginTransactionStore', cibaLoginTransactionStore);",
-        "    c.set('cibaAuthenticationRequestStore', c.get('cibaAuthenticationRequestStore') ?? cibaAuthenticationRequestStore);\n    c.set('cibaLoginTransactionStore', c.get('cibaLoginTransactionStore') ?? cibaLoginTransactionStore);",
-        "generated apply.ts",
+      sources["features/ciba/feature.ts"] = replaceOnce(
+        sources["features/ciba/feature.ts"],
+        "    cibaAuthenticationRequestStore,\n    cibaLoginTransactionStore,",
+        "    cibaAuthenticationRequestStore: c.get('cibaAuthenticationRequestStore') ?? cibaAuthenticationRequestStore,\n    cibaLoginTransactionStore: c.get('cibaLoginTransactionStore') ?? cibaLoginTransactionStore,",
+        "generated features/ciba/feature.ts",
       );
       // /backchannel_authentication never goes through /authorize, so it has to enforce
       // the publisher's scope selection on its own — a client that asks for an
       // unavailable scope should learn about it when it POSTs, not after the user
       // approves it on the authentication device UI. Mirrors PAR and device
       // authorization above.
-      sources["routes/backchannel-authentication.ts"] = replaceOnce(
-        sources["routes/backchannel-authentication.ts"],
+      const cibaPipeline = "features/ciba/endpoints/backchannel-authentication/pipeline.ts";
+      sources[cibaPipeline] = replaceOnce(
+        sources[cibaPipeline],
+        "import { Hono } from 'hono';\n",
+        "import { Hono } from 'hono';\nimport { BackchannelAuthenticationError } from '@maronn-openid-connect/experimental/ciba';\n",
+        "generated backchannel-authentication pipeline.ts",
+      );
+      sources[cibaPipeline] = replaceOnce(
+        sources[cibaPipeline],
         "    validateCibaClientScope(params, client);",
         "    validateCibaClientScope(params, client);\n\n    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = (params['scope'] ?? '').split(' ').filter((scope) => scope.length > 0 && !allowedScopes.includes(scope));\n    if (unsupportedScopes.length > 0) {\n      throw new BackchannelAuthenticationError('invalid_scope', 'Unsupported scope: ' + unsupportedScopes.join(' '));\n    }",
-        "generated routes/backchannel-authentication.ts",
+        "generated backchannel-authentication pipeline.ts",
       );
     },
   },
   // RFC 9701 (JWT Response for OAuth Token Introspection) is generated whole by the CLI:
   // the alternate JWT response, its Accept-header negotiation (RFC 9701 §4/§8.2) and its
-  // Discovery metadata all live in routes/introspection.ts and routes/discovery.ts with no
+  // Discovery metadata all live in features/jwt-introspection-response/ with no
   // repository-owned knob to patch.
   "jwt-introspection-response": {
     apply() {},
   },
-  // RP-Initiated Logout 1.0 is generated whole by the CLI (routes/logout.ts, pages/logout.tsx,
-  // the confirmation cookie in store.ts, end_session_endpoint in Discovery). It needs no new
+  // RP-Initiated Logout 1.0 is generated whole by the CLI (features/rp-initiated-logout/,
+  // end_session_endpoint in Discovery). It needs no new
   // persistence: the confirmation travels in an HttpOnly cookie and the session it ends is the
   // browser-session record the D1 store already holds. rpInitiatedLogoutConfig's
   // postLogoutRedirectUris stays empty (fail safe): a logout always ends on the OP's own
@@ -213,35 +232,36 @@ export const EXPERIMENTAL_WIRING = {
   // CLI default); the per-OP maxRegisteredClients cap (100) bounds what one OP can store.
   "dynamic-client-registration": {
     apply(sources) {
-      sources["store.ts"] = replaceOnce(
-        sources["store.ts"],
+      sources["features/dynamic-client-registration/store.ts"] = replaceOnce(
+        sources["features/dynamic-client-registration/store.ts"],
         "  Resolver extends { findClient(clientId: string): Promise<any> },\n>(base: Resolver): Resolver {",
         "  Resolver extends { findClient(clientId: string): Promise<any> },\n>(base: Resolver, store: DynamicallyRegisteredClientStore = dynamicClientStore): Resolver {",
-        "generated store.ts",
+        "generated dynamic-client-registration store.ts",
       );
-      sources["store.ts"] = replaceOnce(
-        sources["store.ts"],
+      sources["features/dynamic-client-registration/store.ts"] = replaceOnce(
+        sources["features/dynamic-client-registration/store.ts"],
         "      return (await dynamicClientStore.get(clientId)) ?? null;",
         "      return (await store.get(clientId)) ?? null;",
-        "generated store.ts",
+        "generated dynamic-client-registration store.ts",
       );
-      sources["apply.ts"] = replaceOnce(
-        sources["apply.ts"],
-        "    const clientResolver = withDynamicallyRegisteredClients(\n      options.clientResolver ?? createInMemoryClientResolver(),\n    );",
-        "    const registeredClientStore = c.get('dynamicClientStore') ?? dynamicClientStore;\n    const clientResolver = withDynamicallyRegisteredClients(\n      options.clientResolver ?? createInMemoryClientResolver(),\n      registeredClientStore,\n    );",
-        "generated apply.ts",
+      const feature = "features/dynamic-client-registration/feature.ts";
+      sources[feature] = replaceOnce(
+        sources[feature],
+        "  context: ({ c, options }) => ({\n    dynamicClientStore,",
+        "  context: ({ c, options }) => ({\n    dynamicClientStore: c.get('dynamicClientStore') ?? dynamicClientStore,",
+        "generated dynamic-client-registration feature.ts",
       );
-      sources["apply.ts"] = replaceOnce(
-        sources["apply.ts"],
-        "      ? withDynamicallyRegisteredClients(options.tokenClientResolver)",
-        "      ? withDynamicallyRegisteredClients(options.tokenClientResolver, registeredClientStore)",
-        "generated apply.ts",
+      sources[feature] = replaceOnce(
+        sources[feature],
+        "withDynamicallyRegisteredClients(c.get('clientResolver'))",
+        "withDynamicallyRegisteredClients(c.get('clientResolver'), c.get('dynamicClientStore') ?? dynamicClientStore)",
+        "generated dynamic-client-registration feature.ts",
       );
-      sources["apply.ts"] = replaceOnce(
-        sources["apply.ts"],
-        "    c.set('dynamicClientStore', dynamicClientStore);",
-        "    c.set('dynamicClientStore', registeredClientStore);",
-        "generated apply.ts",
+      sources[feature] = replaceOnce(
+        sources[feature],
+        "withDynamicallyRegisteredClients(c.get('tokenClientResolver'))",
+        "withDynamicallyRegisteredClients(c.get('tokenClientResolver'), c.get('dynamicClientStore') ?? dynamicClientStore)",
+        "generated dynamic-client-registration feature.ts",
       );
     },
   },
@@ -272,7 +292,7 @@ export const EXTENSION_WIRING = {
   // store (the JSON-backed one rides on the shared D1 like every other store). What this
   // repository supplies: the Google OAuth client ID the publisher typed in, a verifier that
   // loads on Workers (google-auth-library does not; see google-id-token-verifier.ts), and
-  // D1 persistence for the users it provisions (linkGoogleAccount in persistence.ts).
+  // D1 persistence for the users it provisions (linkFederatedIdentity in persistence.ts).
   "google-login": {
     files: { "google-id-token-verifier.ts": "templates/cloudflare/google-id-token-verifier.ts" },
     apply() {},
@@ -310,52 +330,34 @@ function replaceOnce(source, marker, replacement, description) {
  * build instead of silently producing an OP that ignores the publisher's choices.
  */
 function patchGeneratedSource(sources) {
-  // cli 0.13 split the authorization endpoint into one exported function per step, so the
-  // publisher's scope selection is enforced inside validateAuthorizationRequestParams() by
-  // throwing the same AuthorizationError its own scope checks throw. authorizationErrorOutcome()
-  // then turns it into the redirectable error, including the signed JARM response when
-  // --enable jarm is on, so this patch no longer needs to know about JARM.
+  // cli 0.15 lays each endpoint out as endpoints/<name>/steps/*.ts, one exported function per
+  // step. The publisher's scope selection is enforced inside validateAuthorizationRequestParams()
+  // by throwing the same AuthorizationError its own scope checks throw.
+  // authorizationErrorOutcome() then turns it into the redirectable error, including the signed
+  // JARM response when --enable jarm is on, so this patch does not need to know about JARM.
   //
   // Named disallowedScopes rather than unsupportedScopes: with --scope declared (see
-  // STANDARD_SCOPES above) the generated code may already declare that name in this scope.
-  sources["routes/authorize.ts"] = replaceOnce(
-    sources["routes/authorize.ts"],
+  // STANDARD_SCOPES above) the generated code already declares that name in this scope.
+  sources["endpoints/authorize/steps/validate-request.ts"] = replaceOnce(
+    sources["endpoints/authorize/steps/validate-request.ts"],
     "  validateClientScope(scope, client.scope, redirectUri, state);\n",
-    "  validateClientScope(scope, client.scope, redirectUri, state);\n\n  // Enforce the scopes selected in the publisher UI.\n  const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n  const disallowedScopes = scope.filter((value) => !allowedScopes.includes(value));\n  if (disallowedScopes.length > 0) {\n    throw new AuthorizationError('invalid_scope', 'Unsupported scope: ' + disallowedScopes.join(' '), redirectUri, state);\n  }\n",
-    "generated authorize.ts",
+    "  validateClientScope(scope, client.scope, redirectUri, state);\n\n  // Enforce the scopes selected in the publisher UI.\n  const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n  const disallowedScopes = scope.filter((value) => !allowedScopes.includes(value));\n  if (disallowedScopes.length > 0) {\n    throw new AuthorizationError(AuthorizationErrorCode.InvalidScope, 'Unsupported scope: ' + disallowedScopes.join(' '), redirectUri, state);\n  }\n",
+    "generated authorize validate-request.ts",
   );
 
-  // offline_access drops out of the literal when the refresh-token feature is disabled.
-  // With no custom scopes declared the CLI emits the literal below; with `--scope` it emits
-  // `[...SUPPORTED_SCOPES]` from the generated scopes.ts instead (see STANDARD_SCOPES above).
-  // Either way the publisher's own selection, not the CLI's static list, decides what this
-  // OP actually advertises.
-  const scopeLiteral = /scopesSupported: \['openid', 'profile', 'email', 'address', 'phone'(?:, 'offline_access')?\],/;
-  const scopeSpread = /scopesSupported: \[\.\.\.SUPPORTED_SCOPES\],/;
-  const discoverySource = sources["routes/discovery.ts"];
-  const scopesMarker = scopeLiteral.test(discoverySource) ? scopeLiteral : scopeSpread.test(discoverySource) ? scopeSpread : null;
-  if (!scopesMarker) throw new Error("generated discovery.ts does not contain the expected scopes marker");
-  sources["routes/discovery.ts"] = discoverySource.replace(
-    scopesMarker,
-    "scopesSupported: (c.get('allowedScopes') as string[] | undefined) ?? ['openid'],",
+  // The publisher's selection, not the CLI's static list, decides what this OP advertises.
+  // The refresh-token feature merges offline_access into scopes_supported on its own, which
+  // would advertise a scope the OP rejects when the publisher did not select it, so the
+  // finished metadata gets the selection back.
+  sources["endpoints/discovery/steps/build-metadata.ts"] = replaceOnce(
+    sources["endpoints/discovery/steps/build-metadata.ts"],
+    "  return discoveryOf(\n    features,\n    { ...metadata, code_challenge_methods_supported: ['S256'] },\n    issuer,\n    config,\n  );",
+    "  const advertised = discoveryOf(\n    features,\n    { ...metadata, code_challenge_methods_supported: ['S256'] },\n    issuer,\n    config,\n  );\n  return { ...advertised, scopes_supported: (c.get('allowedScopes') as string[] | undefined) ?? ['openid'] };",
+    "generated discovery build-metadata.ts",
   );
-
-  // The publisher's accounts live in the shared D1. Neither fixture path may ever mint a
-  // login: the CLI seeds a `testuser` account into both the JSON-backed and the
-  // in-memory user store, which would otherwise be a valid account on any OP that fell
-  // back to the generated defaults.
-  sources["store.ts"] = replaceOnce(
-    sources["store.ts"],
-    "function defaultUserFixture(username: string): StoredUser | undefined {",
-    "function defaultUserFixture(username: string): StoredUser | undefined {\n  // Publisher overlay: accounts come from the shared D1 only, never from a fixture.\n  if (username !== undefined) return undefined;",
-    "generated store.ts",
-  );
-  sources["store.ts"] = replaceOnce(
-    sources["store.ts"],
-    "  authenticate(username: string, password: string): (UserClaims & { password: string }) | undefined {",
-    "  authenticate(username: string, password: string): (UserClaims & { password: string }) | undefined {\n    // Publisher overlay: see defaultUserFixture above. The development fixtures this\n    // class seeds must never authenticate on a published OP.\n    if (username || password) return undefined;",
-    "generated store.ts",
-  );
+  // The CLI's development accounts (testuser / otheruser) live in development.ts and reach a
+  // provider only when something registers them explicitly; the generated app never does,
+  // and accounts here come from the shared D1 only (test/generator.test.mjs checks the login).
 }
 
 /**
@@ -410,7 +412,7 @@ export async function generateOp(opId, configPath) {
   // publisher declared (see docs/custom-scopes.md); the CLI needs to know about it at
   // generation time so it can advertise it and reject requests for anything else.
   const customScopeIds = config.scopes.filter((scope) => !STANDARD_SCOPES.includes(scope));
-  const args = ["exec", "--yes", `--package=${cliPackage}`, "--", "maronn-oidc", "generate", "hono", "--output", providerDirectory];
+  const args = ["exec", "--yes", `--package=${cliPackage}`, "--", "maronn-oidc", "generate", "hono", "--db", "kv", "--output", providerDirectory];
   if (disabled.length > 0) args.push("--disable", disabled.join(","));
   if (customScopeIds.length > 0) args.push("--scope", customScopeIds.join(","));
   // All opt-in groups share one --enable list: the CLI namespaces its feature ids across
@@ -420,13 +422,12 @@ export async function generateOp(opId, configPath) {
   await execFile("npm", args, { cwd: ROOT, maxBuffer: 10 * 1024 * 1024 });
 
   const patched = [
-    "apply.ts",
-    "store.ts",
-    "routes/authorize.ts",
-    "routes/discovery.ts",
-    ...(experimentalIds.includes("par") ? ["routes/par.ts"] : []),
-    ...(experimentalIds.includes("device-authorization-grant") ? ["routes/device-authorization.ts"] : []),
-    ...(experimentalIds.includes("ciba") ? ["routes/backchannel-authentication.ts"] : []),
+    "endpoints/authorize/steps/validate-request.ts",
+    "endpoints/discovery/steps/build-metadata.ts",
+    ...(experimentalIds.includes("par") ? ["features/par/feature.ts", "features/par/config.ts", "features/par/endpoints/par/steps/validate-request.ts"] : []),
+    ...(experimentalIds.includes("device-authorization-grant") ? ["features/device-authorization-grant/feature.ts", "features/device-authorization-grant/endpoints/device-authorization/pipeline.ts"] : []),
+    ...(experimentalIds.includes("ciba") ? ["features/ciba/feature.ts", "features/ciba/endpoints/backchannel-authentication/pipeline.ts"] : []),
+    ...(experimentalIds.includes("dynamic-client-registration") ? ["features/dynamic-client-registration/feature.ts", "features/dynamic-client-registration/store.ts"] : []),
   ];
   const sources = Object.fromEntries(await Promise.all(
     patched.map(async (file) => [file, await readFile(path.join(providerDirectory, file), "utf8")]),
@@ -452,6 +453,8 @@ export async function generateOp(opId, configPath) {
   await Promise.all(Object.entries(sources).map(([file, content]) => writeFile(path.join(providerDirectory, file), content)));
 
   await cp(path.join(ROOT, "templates", "cloudflare", "persistence.ts"), path.join(providerDirectory, "persistence.ts"));
+  // --db kv leaves db/instance.ts to the project: it is the one place the store is chosen.
+  await cp(path.join(ROOT, "templates", "cloudflare", "db-instance.ts"), path.join(providerDirectory, "db", "instance.ts"));
   // Baked in rather than passed as Worker bindings: options like PAR's `required` decide
   // how strict the deployed OP is, and a binding can be edited or dropped after deployment.
   let entrypoint = await readFile(path.join(ROOT, "templates", "cloudflare", "index.ts"), "utf8");

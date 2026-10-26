@@ -53,7 +53,7 @@
 
    増えたファイル・設定オブジェクト・Discoveryメタデータ・Cookieなどを確認します。
 
-2. **`scripts/generate-op.mjs` のマーカーが生きているか確認する。** `patchGeneratedSource` は `routes/authorize.ts` の `// Create authentication transaction`、`routes/discovery.ts` の `scopesSupported` リテラル、`store.ts` の2箇所を書き換えます。マーカーが消えていれば例外で落ちるので気付けますが、**その機能を有効にしたときだけ落ちる**ので、必ず有効にした状態で `npm run check` を通してください。
+2. **`scripts/generate-op.mjs` のマーカーが生きているか確認する。** `patchGeneratedSource` は `endpoints/authorize/steps/validate-request.ts` の `validateClientScope(...)` 呼び出しの直後と、`endpoints/discovery/steps/build-metadata.ts` の `return discoveryOf(...)` を書き換えます。マーカーが消えていれば例外で落ちるので気付けますが、**その機能を有効にしたときだけ落ちる**ので、必ず有効にした状態で `npm run check` を通してください。
 
 3. **必要なら永続化を足す。** 生成コードがin-memoryストアを持つ場合は `templates/cloudflare/persistence.ts` にD1版を実装し、`templates/cloudflare/index.ts` の middleware で context に入れます。`oidc_records` に新しい `kind` prefixを足せば、Reaperの `op_id` 単位削除にそのまま乗ります。
 

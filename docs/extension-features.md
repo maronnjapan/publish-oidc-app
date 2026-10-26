@@ -48,8 +48,8 @@ CLIやpackageを上げたときは、`test/extension.test.mjs` が「署名違�
 #### 永続化
 
 - nonce（ボタンのクリックと認可トランザクションを結ぶ）は、CLIが生成する `JsonGoogleLoginNonceStore` が共有D1の `oidc_records`（`kind = 'google-login-nonce:'`）へ保存します。1回使うと消えます。
-- Googleアカウントから作ったユーザーは `templates/cloudflare/persistence.ts` の `createD1UserStore().linkGoogleAccount()` が `oidc_records`（`kind = 'google-user:'`）へ保存します。Googleが申告したプロフィール・メールのclaimだけをコピーします。どちらも `op_id` 単位なのでReaperの回収にそのまま乗ります。
-- `google-user:` は `UserStorage.linkGoogleAccount` の契約を満たすために、生成コードの型に合わせた構造的な型で書いています。拡張機能を選ばなかったOPでも `persistence.ts` が型検査を通ります（`test/generator.test.mjs`、拡張機能ありは `test/extension.test.mjs`）。
+- Googleアカウントから作ったユーザーは `templates/cloudflare/persistence.ts` の `createD1UserStore().linkFederatedIdentity()` が、CLIの `--db kv` ストアへ委譲して `oidc_records`（`kind = 'oidc:user:'` / `'oidc:federated_identity:'`）へ保存します。サブジェクトはGoogleの `sub` ごとにCLIが発行するランダムなUUIDで、Googleが申告したプロフィール・メールのclaimだけをコピーします。どちらも `op_id` 単位なのでReaperの回収にそのまま乗ります。
+- ポータルのアカウントとGoogleのアカウントは同じ `getClaims()` で引かれます（先にポータル側、無ければCLIのストア）。UUIDのサブジェクトはポータルのユーザー名として使えない形なので衝突しません（`test/extension.test.mjs`）。
 
 ## 新しい拡張機能を配線する手順
 

@@ -90,7 +90,7 @@ function body() {
     redirect_url: "https://client.example/callback",
     client_type: "public",
     scopes: ["openid"],
-    features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true },
+    features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": true, "implicit-flow": true, "hybrid-flow": true },
     users: [{ username: "alice", password: "correct-horse-battery" }],
   };
 }

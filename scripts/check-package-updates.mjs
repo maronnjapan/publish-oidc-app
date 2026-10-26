@@ -35,7 +35,7 @@ const TRACKED_PACKAGES = [
 ];
 
 /** Feature toggles the generator and the portal currently understand. */
-const KNOWN_CLI_FEATURES = ["pkce", "refresh-token", "introspection", "revocation", "request-object"];
+const KNOWN_CLI_FEATURES = ["pkce", "refresh-token", "introspection", "revocation", "request-object", "form-post-response-mode", "implicit-flow", "hybrid-flow"];
 
 /**
  * The standard scopes @maronn-openid-connect/core handles itself, whatever the publisher

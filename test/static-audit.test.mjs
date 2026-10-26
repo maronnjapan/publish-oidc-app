@@ -106,10 +106,15 @@ test("every opt-in group has a wiring table, and an id without one stops generat
 });
 
 test("generated OPs never accept the CLI's development fixture account", async () => {
+  // cli 0.15 keeps testuser / otheruser in development.ts, reachable only through
+  // registerDevelopmentUsers(). Nothing here may import or call it, and the overlay's login reads
+  // oidc_users only (test/persistence.test.mjs logs in as testuser against it).
+  const persistence = await readFile("templates/cloudflare/persistence.ts", "utf8");
+  const instance = await readFile("templates/cloudflare/db-instance.ts", "utf8");
+  const entrypoint = await readFile("templates/cloudflare/index.ts", "utf8");
+  for (const source of [persistence, instance, entrypoint]) assert.doesNotMatch(source, /development(?:\.js|Users)|registerDevelopmentUsers/);
   const generate = await readFile("scripts/generate-op.mjs", "utf8");
-  assert.match(generate, /function defaultUserFixture/);
-  assert.match(generate, /authenticate\(username: string, password: string\)/);
-  assert.match(generate, /accounts come from the shared D1 only/);
+  assert.doesNotMatch(generate, /registerDevelopmentUsers/);
 });
 
 test("weekly package follow-up proposes updates and tracks unwired features", async () => {

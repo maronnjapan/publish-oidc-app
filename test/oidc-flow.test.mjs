@@ -20,7 +20,7 @@ const config = {
   client_id: "client_flow123456789",
   client_secret: "flow-secret-that-is-long-enough-for-testing",
   scopes: ["openid", "profile", "email"],
-  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true },
+  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
 };
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), "oidc-flow-test-"));
@@ -84,7 +84,7 @@ test("generated OP completes authorization-code login through shared D1", async 
   // the indexed `kind` column instead of being folded into the hashed record key.
   assert.ok([...DB.records.keys()].every((key) => key.startsWith(`${opId}|`)));
   // The auth transaction is consumed when the code is issued, so it is gone by now.
-  for (const kind of ["access-token:", "authorization-code:", "consent:", "browser-session:"]) {
+  for (const kind of ["oidc:access_token:", "oidc:code:", "oidc:consent:", "oidc:browser_session:"]) {
     assert.ok(DB.kindsInUse().includes(kind), `expected a ${kind} record, saw ${DB.kindsInUse().join(", ")}`);
   }
 });

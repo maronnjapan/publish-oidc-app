@@ -70,11 +70,21 @@ export class MemoryD1 {
           async run() {
             database.statements.push({ sql, params });
             if (sql.startsWith("INSERT INTO oidc_records")) {
-              database.records.set(database.#recordKey(params), { record_key: params[2], value_json: params[3], expires_at: params[4], updated_at: params[5] });
+              const key = database.#recordKey(params);
+              // The setIfAbsent() shape overwrites only an expired row (params[6] is "now"),
+              // and reports whether it wrote anything through meta.changes like D1 does.
+              if (sql.includes("WHERE oidc_records.expires_at IS NOT NULL")) {
+                const existing = database.records.get(key);
+                if (existing && existing.expires_at !== null && existing.expires_at !== undefined ? existing.expires_at > params[6] : Boolean(existing)) {
+                  return { success: true, meta: { changes: 0 } };
+                }
+              }
+              database.records.set(key, { record_key: params[2], value_json: params[3], expires_at: params[4], updated_at: params[5] });
+              return { success: true, meta: { changes: 1 } };
             } else if (sql.startsWith("DELETE FROM oidc_records")) {
               database.records.delete(database.#recordKey(params));
             }
-            return { success: true };
+            return { success: true, meta: { changes: 1 } };
           },
         };
       },
@@ -129,7 +139,7 @@ export async function signingEnvironment(issuer, opId, config, DB, experimental 
       clientType: config.client_type,
       offlineAccessAllowed: config.scopes.includes("offline_access"),
       grantTypes: clientGrantTypes(config.features, experimental),
-      tokenEndpointAuthMethod: config.client_type === "public" ? "none" : "client_secret_post",
+      tokenEndpointAuthMethods: config.client_type === "public" ? ["none"] : ["client_secret_post"],
     }),
   };
 }

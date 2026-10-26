@@ -17,7 +17,7 @@ const config = {
   client_id: "client_exp123456789",
   client_secret: "experimental-secret-long-enough-for-testing",
   scopes: ["openid", "profile", "email"],
-  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true },
+  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
 };
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), "oidc-experimental-test-"));
@@ -98,7 +98,7 @@ test("the catalog only advertises features the CLI and the generator both know",
   const catalog = await readExperimentalCatalog();
   const supported = supportedFeatures(catalog);
   assert.deepEqual(supported.map((feature) => feature.id).sort(), ["ciba", "device-authorization-grant", "dynamic-client-registration", "id-jag", "jarm", "jwt-introspection-response", "par", "rp-initiated-logout", "token-exchange"]);
-  const cliHelp = await readFile("node_modules/@maronn-openid-connect/cli/dist/features.js", "utf8");
+  const cliHelp = await readFile("node_modules/@maronn-openid-connect/cli/dist/registry.js", "utf8");
   for (const feature of supported) {
     assert.match(feature.subpath, /^@maronn-openid-connect\/experimental\//);
     // The portal offers whatever is `supported`. Without matching wiring — and without

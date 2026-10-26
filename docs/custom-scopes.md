@@ -22,15 +22,15 @@
 
 `scripts/generate-op.mjs` の `generateOp()` は `config.scopes` から `STANDARD_SCOPES`（標準6件、`rules.ts` の `REQUIRED_SCOPE` + `OPTIONAL_SCOPES` と同じ配列、`test/choices.test.mjs` が一致を検査）に無いものを取り出し、`--scope <カンマ区切り>` としてCLIへ渡します。
 
-CLIは `--scope` を受け取ると `scopes.ts` を新たに生成し、`routes/authorize.ts` / `routes/consent.ts` / `routes/discovery.ts` がそれを参照するように自分で書き換えます（詳しくは `scopes.ts` 冒頭のコメント）。このリポジトリが当てる変更は1箇所だけです。
+CLIは `--scope` を受け取ると `scopes.ts` を新たに生成し、CLI自身の生成コード（`ADVERTISED_SCOPES` / `findUnsupportedScopes()`）がそれを参照します（詳しくは `scopes.ts` 冒頭のコメント）。このリポジトリが当てる変更は1箇所だけです。
 
 | 対象 | 内容 |
 |---|---|
-| `routes/discovery.ts` | `scopesSupported` を `SUPPORTED_SCOPES`（標準6件＋宣言したカスタムスコープ）ではなく、作成画面で選択されたスコープ一覧に差し替え |
+| `endpoints/discovery/steps/build-metadata.ts` | 組み立て後の `scopes_supported` を、作成画面で選択されたスコープ一覧に差し替え |
 
-このパッチは `scopeLiteral` と `scopeSpread` の2つのマーカーのどちらかにマッチします。`--scope` を使わないOPでは前者（CLIが元々出していたリテラル配列）、使うOPでは後者（`scopes.ts` の `SUPPORTED_SCOPES` をスプレッドする形）です。どちらもCLIのバージョンで形が変わり得るため、マッチしなければ例外で落ちます（`scripts/generate-op.mjs` の `patchGeneratedSource()`）。
+このパッチはCLIのバージョンで形が変わり得るため、マーカーが見つからなければ例外で落ちます（`scripts/generate-op.mjs` の `patchGeneratedSource()`）。
 
-`routes/authorize.ts` に当てている既存の「作成画面で選んだスコープ以外を拒否する」パッチ（[docs/experimental.md](experimental.md#生成コードへのパッチ) と同じ仕組み）はそのままです。CLI自身の `findUnsupportedScopes()`（standard∪custom全体が対象、`--scope` を使ったときだけ生成される）がその手前で先に走り、二重の防御になります。PAR・Device Authorization Grantのスコープ強制パッチも `c.get('allowedScopes')` を見ているだけなので、カスタムスコープが混ざっていても変更なしでそのまま機能します。
+`endpoints/authorize/steps/validate-request.ts` に当てている既存の「作成画面で選んだスコープ以外を拒否する」パッチ（[docs/experimental.md](experimental.md#生成コードへのパッチ) と同じ仕組み）はそのままです。CLI自身の `findUnsupportedScopes()`（standard∪custom全体が対象、`--scope` を使ったときだけ生成される）がその手前で先に走り、二重の防御になります。PAR・Device Authorization Grantのスコープ強制パッチも `c.get('allowedScopes')` を見ているだけなので、カスタムスコープが混ざっていても変更なしでそのまま機能します。
 
 ## 手で編集が必要な部分
 

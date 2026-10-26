@@ -26,7 +26,7 @@ const config = {
   client_id: "client_scope123456789",
   client_secret: "custom-scope-secret-long-enough-for-testing",
   scopes: ["openid", "reports.read", "reports.write"],
-  features: { pkce: true, "refresh-token": false, introspection: false, revocation: false, "request-object": false },
+  features: { pkce: true, "refresh-token": false, introspection: false, revocation: false, "request-object": false, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
 };
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), "oidc-custom-scope-test-"));
@@ -133,5 +133,5 @@ test("a declared custom scope completes the authorization-code flow and is grant
   const tokens = await tokenResponse.json();
   assert.match(tokens.scope, /\breports\.read\b/);
 
-  assert.ok(DB.kindsInUse().includes("authorization-code:"));
+  assert.ok(DB.kindsInUse().includes("oidc:code:"));
 });

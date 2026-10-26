@@ -21,7 +21,7 @@ const config = {
   client_id: "client_opt123456789",
   client_secret: "optional-secret-long-enough-for-testing",
   scopes: ["openid", "profile", "email"],
-  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true },
+  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
 };
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), "oidc-optional-test-"));
@@ -74,7 +74,7 @@ test("the catalog only advertises optional features the CLI and the generator bo
   const catalog = await readOptionalCatalog();
   const supported = supportedFeatures(catalog);
   assert.deepEqual(supported.map((feature) => feature.id).sort(), []);
-  const cliFeatures = await readFile("node_modules/@maronn-openid-connect/cli/dist/features.js", "utf8");
+  const cliFeatures = await readFile("node_modules/@maronn-openid-connect/cli/dist/registry.js", "utf8");
   for (const feature of supported) {
     // The portal offers whatever is `supported`. Without matching wiring — and without
     // the CLI knowing the id — the request would pass validation, burn the caller's

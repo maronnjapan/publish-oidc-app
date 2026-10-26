@@ -11,6 +11,9 @@
     "refresh-token": false,
     "introspection": false,
     "revocation": true,
-    "request-object": false
+    "request-object": false,
+    "form-post-response-mode": false,
+    "implicit-flow": false,
+    "hybrid-flow": false
   }
 }

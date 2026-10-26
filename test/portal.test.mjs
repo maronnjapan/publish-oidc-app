@@ -19,7 +19,7 @@ const { credentials, db, ip, rateLimit } = await importModules({
 const { ipKey } = ip;
 const { createDb } = db;
 
-const features = { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true };
+const features = { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": true, "implicit-flow": true, "hybrid-flow": true };
 
 function createBody(clientType = "public", overrides = {}) {
   return {

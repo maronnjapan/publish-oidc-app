@@ -19,7 +19,7 @@ import {
 } from "./lib.mjs";
 import { generateOp } from "./generate-op.mjs";
 
-const FEATURES = ["pkce", "refresh-token", "introspection", "revocation", "request-object"];
+const FEATURES = ["pkce", "refresh-token", "introspection", "revocation", "request-object", "form-post-response-mode", "implicit-flow", "hybrid-flow"];
 
 function parseRequestConfig(row, opId) {
   if (!row || row.op_id !== opId || typeof row.config_json !== "string") throw new Error("deployment request/config was not found");
@@ -87,7 +87,7 @@ export async function deployOp(opId) {
     clientType: config.client_type,
     offlineAccessAllowed: config.scopes.includes("offline_access"),
     grantTypes: clientGrantTypes(config.features, generated.experimental),
-    tokenEndpointAuthMethod: config.client_type === "public" ? "none" : "client_secret_post",
+    tokenEndpointAuthMethods: config.client_type === "public" ? ["none"] : ["client_secret_post"],
   };
   await uploadWorker(infra, token, opId, code, [
     { type: "d1", name: "DB", id: infra.d1_database_id },

@@ -20,7 +20,7 @@ await writeFile(configPath, JSON.stringify({
   client_type: "public",
   client_id: "client_store12345678",
   scopes: ["openid"],
-  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true },
+  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
   experimental: { par: {} },
 }));
 const generated = await generateOp(opId, configPath);
@@ -78,7 +78,7 @@ test("keys returned by list() can be handed straight back to delete()", async ()
 test("accounts authenticate against the salted hash and nothing else", async () => {
   const DB = new MemoryD1();
   await DB.addUser("maronn-op-users000000", "alice", "password-123");
-  const users = createD1UserStore(DB, "maronn-op-users000000");
+  const users = createD1UserStore(DB, "maronn-op-users000000", { getClaims: async () => undefined, authenticate: async () => undefined, linkFederatedIdentity: async () => { throw new Error("not used"); } });
 
   assert.equal((await users.authenticate("alice", "password-123")).sub, "alice");
   assert.equal(await users.authenticate("alice", "wrong-password"), undefined);
@@ -90,7 +90,7 @@ test("accounts authenticate against the salted hash and nothing else", async () 
 test("the provider store set replaces the generated user store", async () => {
   const DB = new MemoryD1();
   const stores = createD1ProviderStores(DB, "maronn-op-stores00000");
-  for (const name of ["transactionStore", "authCodeStore", "accessTokenStore", "refreshTokenStore", "authSessionStore", "browserSessionStore", "consentStore", "userStore"]) {
+  for (const name of ["transactionStore", "authCodeStore", "accessTokenStore", "refreshTokenStore", "authSessionStore", "browserSessionStore", "consentStore", "userStore", "upstreamLoginStore"]) {
     assert.ok(stores[name], `missing ${name}`);
   }
   // The generated JSON user store seeds a fixture on a miss; ours must not.

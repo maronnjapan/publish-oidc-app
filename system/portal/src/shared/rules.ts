@@ -7,7 +7,7 @@
  * test compared them by extracting source text.
  */
 
-export const FEATURE_NAMES = ["pkce", "refresh-token", "introspection", "revocation", "request-object"] as const;
+export const FEATURE_NAMES = ["pkce", "refresh-token", "introspection", "revocation", "request-object", "form-post-response-mode", "implicit-flow", "hybrid-flow"] as const;
 export type FeatureName = (typeof FEATURE_NAMES)[number];
 
 export const OPTIONAL_SCOPES = ["profile", "email", "address", "phone", "offline_access"] as const;

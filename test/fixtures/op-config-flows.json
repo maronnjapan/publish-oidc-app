@@ -1,0 +1,23 @@
+{
+  "op_id": "maronn-op-flows123456",
+  "name": "Test OP",
+  "redirect_url": "https://client.example/callback",
+  "client_type": "confidential",
+  "client_id": "client_test123456789",
+  "client_secret": "test-secret-that-is-long-enough-for-validation",
+  "scopes": [
+    "openid",
+    "profile",
+    "email"
+  ],
+  "features": {
+    "pkce": true,
+    "refresh-token": false,
+    "introspection": false,
+    "revocation": true,
+    "request-object": false,
+    "form-post-response-mode": true,
+    "implicit-flow": true,
+    "hybrid-flow": true
+  }
+}
