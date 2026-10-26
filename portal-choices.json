@@ -129,6 +129,33 @@
             { "label": "OIDC Core 1.0 §6", "url": "https://openid.net/specs/openid-connect-core-1_0.html#JWTRequests" },
             { "label": "RFC 9101", "url": "https://datatracker.ietf.org/doc/html/rfc9101" }
           ]
+        },
+        {
+          "id": "form-post-response-mode",
+          "label": "Form Post Response Mode",
+          "default": true,
+          "summary": "認可レスポンスを response_mode=form_post（自動送信されるHTMLフォームのPOST）で返せるようにします。",
+          "links": [
+            { "label": "OAuth 2.0 Form Post Response Mode", "url": "https://openid.net/specs/oauth-v2-form-post-response-mode-1_0.html" }
+          ]
+        },
+        {
+          "id": "implicit-flow",
+          "label": "Implicit Flow",
+          "default": true,
+          "summary": "response_type=id_token / id_token token で認可エンドポイントから直接トークンを返すImplicit Flowを有効にします。OAuth 2.1では廃止された方式です。",
+          "links": [
+            { "label": "OIDC Core 1.0 §3.2", "url": "https://openid.net/specs/openid-connect-core-1_0.html#ImplicitFlowAuth" }
+          ]
+        },
+        {
+          "id": "hybrid-flow",
+          "label": "Hybrid Flow",
+          "default": true,
+          "summary": "response_type=code id_token などで、認可コードと一部のトークンを認可エンドポイントから同時に返すHybrid Flowを有効にします。",
+          "links": [
+            { "label": "OIDC Core 1.0 §3.3", "url": "https://openid.net/specs/openid-connect-core-1_0.html#HybridFlowAuth" }
+          ]
         }
       ]
     }

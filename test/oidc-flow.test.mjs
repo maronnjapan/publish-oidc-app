@@ -7,6 +7,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { generateOp } from "../scripts/generate-op.mjs";
 import { bundle } from "../scripts/lib.mjs";
+import { withCookieJar } from "./support/cookie-jar.mjs";
 import { MemoryD1, base64Url, signingEnvironment } from "./support/d1-mock.mjs";
 
 const opId = "maronn-op-flow123456";
@@ -19,7 +20,7 @@ const config = {
   client_id: "client_flow123456789",
   client_secret: "flow-secret-that-is-long-enough-for-testing",
   scopes: ["openid", "profile", "email"],
-  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true },
+  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
 };
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), "oidc-flow-test-"));
@@ -36,29 +37,28 @@ async function startSession() {
   const DB = new MemoryD1();
   await DB.addUser(opId, "alice", "password-123");
   const runtimeEnv = await signingEnvironment(issuer, opId, config, DB);
-  const fetchWorker = (request) => worker.default.fetch(request, runtimeEnv, context);
+  const fetchWorker = withCookieJar((request) => worker.default.fetch(request, runtimeEnv, context));
   const verifier = "a".repeat(64);
   const challenge = base64Url(new Uint8Array(await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
   const authorizeUrl = new URL(`${issuer}/authorize`);
   for (const [name, value] of Object.entries({ response_type: "code", client_id: config.client_id, redirect_uri: config.redirect_url, scope: "openid profile email", state: "flow-state", nonce: "flow-nonce", code_challenge: challenge, code_challenge_method: "S256" })) authorizeUrl.searchParams.set(name, value);
   const authorize = await fetchWorker(new Request(authorizeUrl));
   assert.equal(authorize.status, 302, await authorize.clone().text());
-  const transactionId = new URL(authorize.headers.get("location"), issuer).searchParams.get("transaction_id");
   const loginPage = await fetchWorker(new Request(new URL(authorize.headers.get("location"), issuer)));
   const csrfToken = (await loginPage.text()).match(/name="csrf_token" value="([^"]+)"/)?.[1];
-  assert.ok(transactionId && csrfToken);
-  const login = (username, password) => fetchWorker(new Request(`${issuer}/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ transaction_id: transactionId, csrf_token: csrfToken, username, password }) }));
-  return { DB, fetchWorker, transactionId, csrfToken, verifier, login };
+  assert.ok(csrfToken);
+  const login = (username, password) => fetchWorker(new Request(`${issuer}/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ csrf_token: csrfToken, username, password }) }));
+  return { DB, fetchWorker, csrfToken, verifier, login };
 }
 
 test("generated OP completes authorization-code login through shared D1", async () => {
-  const { DB, fetchWorker, transactionId, csrfToken, verifier, login } = await startSession();
+  const { DB, fetchWorker, csrfToken, verifier, login } = await startSession();
 
   const loggedIn = await login("alice", "password-123");
   assert.equal(loggedIn.status, 302, await loggedIn.clone().text());
   assert.match(loggedIn.headers.get("set-cookie"), /session_id=/);
 
-  const consentBody = new URLSearchParams({ transaction_id: transactionId, csrf_token: csrfToken, action: "approve" });
+  const consentBody = new URLSearchParams({ csrf_token: csrfToken, action: "approve" });
   const consent = await fetchWorker(new Request(new URL(loggedIn.headers.get("location"), issuer), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: consentBody }));
   assert.equal(consent.status, 302, await consent.clone().text());
   const callback = new URL(consent.headers.get("location"));
@@ -84,7 +84,7 @@ test("generated OP completes authorization-code login through shared D1", async 
   // the indexed `kind` column instead of being folded into the hashed record key.
   assert.ok([...DB.records.keys()].every((key) => key.startsWith(`${opId}|`)));
   // The auth transaction is consumed when the code is issued, so it is gone by now.
-  for (const kind of ["access-token:", "authorization-code:", "consent:", "browser-session:"]) {
+  for (const kind of ["oidc:access_token:", "oidc:code:", "oidc:consent:", "oidc:browser_session:"]) {
     assert.ok(DB.kindsInUse().includes(kind), `expected a ${kind} record, saw ${DB.kindsInUse().join(", ")}`);
   }
 });

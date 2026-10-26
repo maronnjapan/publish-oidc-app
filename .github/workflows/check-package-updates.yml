@@ -1,14 +1,15 @@
 name: check-package-updates
 
-# Weekly follow-up on @maronn-openid-connect/cli, @maronn-openid-connect/core and @maronn-openid-connect/experimental.
+# Weekly follow-up on @maronn-openid-connect/cli, core, experimental and google-login.
 # A version bump is applied on a branch and offered as a pull request; a newly published
 # opt-in feature additionally needs the wiring described in docs/experimental.md (for the
-# experimental package) or docs/optional-features.md (for the CLI's own optional
-# features), so the run leaves a tracking issue for it.
+# experimental package), docs/optional-features.md (for the CLI's own optional
+# features) or docs/extension-features.md (for the CLI's extension features), so the
+# run leaves a tracking issue for it.
 #
 # The report step reads `maronn-oidc --help`, which is the only source for the optional
-# group; the apply step deliberately skips it (running an unreleased CLI to bump a pin is
-# not worth the minutes), so optional catalog entries are recorded by the Claude Code
+# and extension groups; the apply step deliberately skips it (running an unreleased CLI to bump a pin is
+# not worth the minutes), so optional/extension catalog entries are recorded by the Claude Code
 # routine rather than here.
 
 on:

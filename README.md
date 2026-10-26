@@ -16,9 +16,10 @@ OpenID ConnectやOAuthまわりで調べたことはブログに書いていま�
 ## 主な機能
 
 - Worker 1個につきOP 1個を発行し、Workerのサブドメインラベル（例: `maronn-op-abc...`）をOP IDと共有D1の名前空間キーに使用
-- 作成画面でリダイレクトURL、`openid`に加えるスコープ、`public`/`confidential`、PKCE・Refresh Token・Introspection・Revocation・Request Objectを選択
-- `@maronn-openid-connect/experimental`の試験的な機能（PAR / RFC 9126、Token Exchange / RFC 8693、JARM、Device Authorization Grant / RFC 8628）を機能単位で選択（安定していない旨を作成画面と作成完了画面に明示）
+- 作成画面でリダイレクトURL、`openid`に加えるスコープ、標準の6スコープ以外の任意のカスタムスコープ（`--scope`、[docs/custom-scopes.md](docs/custom-scopes.md)）、`public`/`confidential`、PKCE・Refresh Token・Introspection・Revocation・Request Objectを選択
+- `@maronn-openid-connect/experimental`の試験的な機能（PAR / RFC 9126、Token Exchange / RFC 8693、JARM、Device Authorization Grant / RFC 8628、ID-JAG / Cross-App Access、CIBA / CIBA Core 1.0、JWT Introspection Response / RFC 9701）を機能単位で選択（安定していない旨を作成画面と作成完了画面に明示）
 - CLI本体のオプション機能（既定で無効な安定機能。認可トランザクションのブラウザ束縛）を機能単位で選択（既定では折りたたみ表示）
+- CLIの拡張機能（既定で無効な安定機能。Googleでログイン）を機能単位で選択（既定では折りたたみ表示。GoogleのOAuthクライアントIDの入力が必要）
 - 選択項目ごとに一行の概要を作成画面へ表示し、任意で仕様書やリポジトリ内ドキュメントへのリンクも表示（`portal-choices.json`ほかのカタログで設定）
 - 1〜5ユーザーを画面または`username,password`形式のCSVで登録
 - パスワードはSHA-256（個別salt）で共有D1へ保存
@@ -145,6 +146,7 @@ Discoveryは各OPの`/.well-known/openid-configuration`、JWKSは`/.well-known/j
 | クライアント種別・スコープ・OP機能 | `portal-choices.json` |
 | オプション機能 | `optional-features.json` |
 | 試験的な機能 | `experimental-features.json` |
+| 拡張機能 | `extension-features.json` |
 
 リンクは必須ではありません。付ける場合は外部URL（`"url": "https://..."`）か、このリポジトリ内のファイル（`"doc": "docs/experimental.md"`）を書きます。後者は`infra.json`の`github_owner`/`github_repo`から`https://github.com/<owner>/<repo>/blob/main/<path>`へ解決されるので、fork先ではfork側のドキュメントを指します。書き方と制約は[docs/choices.md](docs/choices.md)を参照してください。
 
@@ -158,6 +160,11 @@ Discoveryは各OPの`/.well-known/openid-configuration`、JWKSは`/.well-known/j
 | `token-exchange` | Token Exchange | RFC 8693 | `/token`の`grant_type=urn:ietf:params:oauth:grant-type:token-exchange` |
 | `jarm` | JWT Secured Authorization Response Mode | JARM | なし（`/authorize`・`/consent`の応答を署名付きJWTに変更） |
 | `device-authorization-grant` | Device Authorization Grant | RFC 8628 | `POST /device_authorization`、`/device`ほか |
+| `id-jag` | ID-JAG（Cross-App Access） | draft-ietf-oauth-identity-assertion-authz-grant-04 | `/token`の`grant_type=urn:ietf:params:oauth:grant-type:token-exchange`（発行）・`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`（引き換え） |
+| `ciba` | CIBA（Client-Initiated Backchannel Authentication） | CIBA Core 1.0 | `POST /backchannel_authentication`、`/ciba`ほか |
+| `jwt-introspection-response` | JWT Introspection Response | RFC 9701 | なし（`POST /introspect`の応答形式を条件付きで変更） |
+| `rp-initiated-logout` | RP-Initiated Logout | OIDC RP-Initiated Logout 1.0 | `/logout`、`POST /logout/approve` |
+| `dynamic-client-registration` | Dynamic Client Registration | RFC 7591 | `POST /register` |
 
 **これらはAPIが安定しておらず、他の機能より適切に動作しない可能性が高い**ため、動作検証用途に限ってください。マイナーリリースでも破壊的変更や削除が起こり得ます。同じ注記を作成画面と作成完了画面にも表示します。
 
@@ -165,17 +172,23 @@ Discoveryは各OPの`/.well-known/openid-configuration`、JWKSは`/.well-known/j
 
 ## オプション機能
 
-CLIの機能トグルは3分類あります。既定で有効な標準機能、既定で無効だが**安定している**オプション機能、そして上記の試験的な機能です。オプション機能は「OIDC Core / OAuth 2.1 のどの条項も要求していない堅牢化」であるためにCLIが既定で無効にしているもので、APIが不安定なわけではありません。
+CLIの機能トグルは4分類あります。既定で有効な標準機能、既定で無効だが**安定している**オプション機能、上記の試験的な機能、そして下記の拡張機能です。オプション機能は「OIDC Core / OAuth 2.1 のどの条項も要求していない堅牢化」であるためにCLIが既定で無効にしているもので、APIが不安定なわけではありません。
 
-| feature-id | 内容 | 準拠仕様 | 追加されるもの |
+いま選べるオプション機能はありません。唯一あった`transaction-binding`（認可トランザクションのブラウザ束縛）はcli 0.11.0で標準動作に昇格し、すべてのOPで有効です（トランザクションIDはURLに載らず、HttpOnlyの`__Host-oidc_txn` Cookieで運ばれます）。次のオプション機能が現れたときのために、カタログと配線の仕組みは残してあり、機能が無い間は作成画面にこのセクションを出しません。登場すると既定で折りたたまれたセクションとして現れます。一覧は`optional-features.json`が単一の情報源です。配線手順と、新しい分類が現れたときの対応は[docs/optional-features.md](docs/optional-features.md)を参照してください。
+
+## 拡張機能
+
+既定で無効な**安定機能**のうち、機能ごとに専用のnpm packageを持つ連携です。experimentalのような注記は付きません。
+
+| feature-id | 内容 | package | 追加されるもの |
 |---|---|---|---|
-| `transaction-binding` | 認可トランザクションのブラウザ束縛 | OIDC Core 1.0 §3.1.2.3 / §3.1.2.4 | なし |
+| `google-login` | ログイン画面の「Sign in with Google」 | `@maronn-openid-connect/google-login` | `POST /login/google` |
 
-作成画面では「オプション機能」セクションから選べます。設定する機会がまず無いため、このセクションは既定で折りたたまれています。一覧は`optional-features.json`が単一の情報源です。配線手順と、4つ目の分類が現れたときの対応は[docs/optional-features.md](docs/optional-features.md)を参照してください。
+作成画面の「拡張機能」セクション（既定で折りたたみ）で選びます。`google-login` はGoogleのOAuthクライアントIDの入力が必要で、**作成後にGoogle Cloud consoleでOPのURLを登録する**手順が作成完了画面に出ます。`google-auth-library` はWorkersでロードできないため、このリポジトリがWebCrypto製の検証器に置き換えています。理由・永続化・配線手順は[docs/extension-features.md](docs/extension-features.md)を参照してください。一覧は`extension-features.json`が単一の情報源です。
 
 ## パッケージの追従
 
-`@maronn-openid-connect/cli`・`@maronn-openid-connect/core`・`@maronn-openid-connect/experimental`は固定バージョンで参照しています。追従は次で行います。
+`@maronn-openid-connect/cli`・`@maronn-openid-connect/core`・`@maronn-openid-connect/experimental`・`@maronn-openid-connect/google-login`は固定バージョンで参照しています。追従は次で行います。
 
 ```sh
 npm run packages:check    # 最新版・新機能・CLIトグルの差分を表示
@@ -183,10 +196,10 @@ npm run packages:update   # 固定バージョンと両方のカタログを更�
 npm run check             # 更新後の検証
 ```
 
-`check-package-updates.mjs`はレジストリの`dist-tags.latest`、experimentalの`exports` subpath（= feature-id）、最新CLIの`--help`が出す機能トグル一覧（通常・optional・experimentalの3分類）、そして`--help`にこのリポジトリが解釈していない見出しが増えていないかを見ます。最後の1点は、CLIが3つ目の分類を追加したときにレポートが何も言わなかったことへの対策です。自動実行は2系統です。
+`check-package-updates.mjs`はレジストリの`dist-tags.latest`、experimentalの`exports` subpath（= feature-id）、最新CLIの`--help`が出す機能トグル一覧（通常・optional・experimental・extensionの4分類）、そして`--help`にこのリポジトリが解釈していない見出しが増えていないかを見ます。最後の1点は、CLIが3つ目の分類を追加したときにレポートが何も言わなかったことへの対策で、4つ目（extension）はこれで検出できました。自動実行は2系統です。
 
 - `.github/workflows/check-package-updates.yml`（毎週月曜00:00 UTC）— バージョン更新を`chore/maronn-oidc-package-updates`ブランチへ適用してPRを作り、未配線の新機能はIssueで追跡します。
-- Claude Codeのルーティーンタスク（毎週月曜03:00 UTC、トリガーID `trig_01SXA2TNgjZWWvagYqAdJSWa`）— 同じチェックに加えて、新しいopt-in機能（optional・experimentalどちらも）をポータルで選択できる状態まで配線し`claude/maronn-oidc-feature-followup`ブランチへPRを出します。CLIが新しい分類のトグルを増やした場合の対応もこのタスクが担当します。更新がなければ何もしません。
+- Claude Codeのルーティーンタスク（毎週月曜03:00 UTC、トリガーID `trig_01SXA2TNgjZWWvagYqAdJSWa`）— 同じチェックに加えて、新しいopt-in機能（optional・experimental・extensionのいずれも）をポータルで選択できる状態まで配線し`claude/maronn-oidc-feature-followup`ブランチへPRを出します。CLIが新しい分類のトグルを増やした場合の対応もこのタスクが担当します。更新がなければ何もしません。
 
 ## 開発
 
@@ -197,7 +210,7 @@ npm run build
 npm run check
 ```
 
-テストはポータル入力・CSV/UI、選択項目の説明とリンク、IP制限、資格情報の条件分岐、salt付きSHA-256、D1名前空間、CLI機能トグル、生成OPのWorkers bundleを検証します。ポータルとReaperのテストは`node:sqlite`の実データベースをD1インターフェースの裏に置いて動かすので（`test/support/d1-sqlite.mjs`）、SQLとして成立しないクエリはその場で落ちます。フォームのreducer・入力ルール・CSV・作成中のポーリングは、DOMを介さない単体テストです。共有D1のDDLとDrizzleスキーマが一致していることは`test/db-schema.test.mjs`が列単位で検査します。生成物の`persistence.ts`はCLIが生成したストア契約に対して型検査され、契約が変わればCIで落ちます。experimentalについては、PARとToken Exchangeそれぞれを有効にしたOPを実際に生成・バンドルし、`POST /par`から`/token`までのフロー、`request_uri`の使い捨て（並行リクエスト含む）、必須モード、スコープ絞り込み交換まで通します。optionalについては、`transaction-binding`を有効にしたOPと無効なOPを生成し、Cookieを持つブラウザだけが認可コードを取得できること・他のトランザクションのCookieでは同意を代行できないことまで通します。あわせて固定CLIの`--help`を実行し、解釈できない見出しの分類が増えていないかも検査します。
+テストはポータル入力・CSV/UI、選択項目の説明とリンク、IP制限、資格情報の条件分岐、salt付きSHA-256、D1名前空間、CLI機能トグル、生成OPのWorkers bundleを検証します。ポータルとReaperのテストは`node:sqlite`の実データベースをD1インターフェースの裏に置いて動かすので（`test/support/d1-sqlite.mjs`）、SQLとして成立しないクエリはその場で落ちます。フォームのreducer・入力ルール・CSV・作成中のポーリングは、DOMを介さない単体テストです。共有D1のDDLとDrizzleスキーマが一致していることは`test/db-schema.test.mjs`が列単位で検査します。生成物の`persistence.ts`はCLIが生成したストア契約に対して型検査され、契約が変わればCIで落ちます。experimentalについては、PARとToken Exchangeそれぞれを有効にしたOPを実際に生成・バンドルし、`POST /par`から`/token`までのフロー、`request_uri`の使い捨て（並行リクエスト含む）、必須モード、スコープ絞り込み交換まで通します。optionalについては、カタログが固定CLIの`--help`と一致することと、標準になった`transaction-binding`のCookie束縛（Cookieの無いブラウザはログイン画面のCSRFトークンを読めない）を検査します。あわせて固定CLIの`--help`を実行し、解釈できない見出しの分類が増えていないかも検査します。
 
 ## セキュリティと運用
 

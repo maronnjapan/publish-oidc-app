@@ -20,7 +20,7 @@ await writeFile(configPath, JSON.stringify({
   client_type: "public",
   client_id: "client_store12345678",
   scopes: ["openid"],
-  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true },
+  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
   experimental: { par: {} },
 }));
 const generated = await generateOp(opId, configPath);
@@ -29,7 +29,7 @@ await build({
   entryPoints: [path.join(generated.appDirectory, "src/oidc-provider/persistence.ts")],
   bundle: true, platform: "node", format: "esm", outfile: output,
 });
-const { createD1DeviceAuthorizationStore, createD1ParStore, createD1ProviderStores, createD1StoreBackend, createD1UserStore } =
+const { createD1DeviceAuthorizationStore, createD1DynamicClientStore, createD1ParStore, createD1ProviderStores, createD1StoreBackend, createD1UserStore } =
   await import(`${pathToFileURL(output).href}?${Date.now()}`);
 
 test("the backend namespaces every key by op_id and never stores the raw key", async () => {
@@ -78,7 +78,7 @@ test("keys returned by list() can be handed straight back to delete()", async ()
 test("accounts authenticate against the salted hash and nothing else", async () => {
   const DB = new MemoryD1();
   await DB.addUser("maronn-op-users000000", "alice", "password-123");
-  const users = createD1UserStore(DB, "maronn-op-users000000");
+  const users = createD1UserStore(DB, "maronn-op-users000000", { getClaims: async () => undefined, authenticate: async () => undefined, linkFederatedIdentity: async () => { throw new Error("not used"); } });
 
   assert.equal((await users.authenticate("alice", "password-123")).sub, "alice");
   assert.equal(await users.authenticate("alice", "wrong-password"), undefined);
@@ -90,7 +90,7 @@ test("accounts authenticate against the salted hash and nothing else", async () 
 test("the provider store set replaces the generated user store", async () => {
   const DB = new MemoryD1();
   const stores = createD1ProviderStores(DB, "maronn-op-stores00000");
-  for (const name of ["transactionStore", "authCodeStore", "accessTokenStore", "refreshTokenStore", "authSessionStore", "browserSessionStore", "consentStore", "userStore"]) {
+  for (const name of ["transactionStore", "authCodeStore", "accessTokenStore", "refreshTokenStore", "authSessionStore", "browserSessionStore", "consentStore", "userStore", "upstreamLoginStore"]) {
     assert.ok(stores[name], `missing ${name}`);
   }
   // The generated JSON user store seeds a fixture on a miss; ours must not.
@@ -158,4 +158,18 @@ test("a device authorization record round-trips through both its device_code and
   assert.equal(consumed.subject, "alice");
   assert.equal(await store.consume(record.deviceCode), null, "a device_code is single use");
   assert.equal(await store.findByUserCode(record.userCode), null, "the user_code index must not outlive the record it points to");
+});
+
+test("dynamic client registrations are scoped to their OP, never expire, and are counted per OP", async () => {
+  const DB = new MemoryD1();
+  const store = createD1DynamicClientStore(DB, "maronn-op-dcrstore0000");
+  const other = createD1DynamicClientStore(DB, "maronn-op-dcrstore1111");
+  assert.equal(await store.count(), 0);
+  await store.save({ clientId: "dcr-abc", redirectUris: ["https://rp.example.com/cb"] });
+  await other.save({ clientId: "dcr-def", redirectUris: ["https://rp.example.com/cb"] });
+  assert.equal((await store.get("dcr-abc")).clientId, "dcr-abc");
+  assert.equal(await store.get("dcr-def"), undefined, "another OP's registration must not resolve");
+  assert.equal(await store.count(), 1);
+  assert.equal([...DB.records.keys()].some((key) => key.includes("dcr-abc")), false, "the client id must not be stored in the clear as a key");
+  assert.equal([...DB.records.values()].every((row) => row.expires_at === null), true);
 });
