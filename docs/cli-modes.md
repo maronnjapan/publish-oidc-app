@@ -7,6 +7,8 @@
 | `Flow documents (graph / --flow)` | `--flow <file>`、`graph` コマンド | `--flow` は `--enable` / `--disable` / `--scope` / `--db` をまとめて置き換えるため、機能カタログ（`*-features.json`）を経由する選択と両立しません。エンドポイントやステップの並べ替えもポータルのUIでは表現しません。 |
 | `Database (--db sql \| --db kv)` | `--db <sql\|kv>` | 生成される `db/` は利用者が `db/instance.ts` を書く前提です。このリポジトリは `templates/cloudflare/persistence.ts` が共有D1（`oidc_records` ほか）へ `ProviderStores` を実装し、Reaperの `op_id` 単位の削除もそれに乗っています。`--db` を渡すと永続化が二重になります。 |
 
+cli 0.17.0で増えた `explain` コマンド（生成されるエンドポイント・ステップ・関数の案内）と `--depth` / `--callers` は、生成物を変えない読み取り専用のコマンドです。機能トグルでも生成モードでもないので、ポータルにも `HELP_SECTIONS` にも対応するものはありません。
+
 ## これが変わったら見直すこと
 
 - `--db sql` が「D1向けのSQL」を終端まで生成するようになり、`db/instance.ts` も生成されるようになった場合は、`persistence.ts` を置き換えられるか検討します（Reaper・共有D1との整合が前提）。

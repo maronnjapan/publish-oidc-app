@@ -7,7 +7,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { EXPERIMENTAL_WIRING, generateOp, parseExperimentalSelection } from "../scripts/generate-op.mjs";
 import { bundle, readExperimentalCatalog, supportedFeatures } from "../scripts/lib.mjs";
-import { withCookieJar } from "./support/cookie-jar.mjs";
+import { transactionFields, withCookieJar } from "./support/cookie-jar.mjs";
 import { MemoryD1, base64Url, signingEnvironment } from "./support/d1-mock.mjs";
 
 const config = {
@@ -17,7 +17,7 @@ const config = {
   client_id: "client_exp123456789",
   client_secret: "experimental-secret-long-enough-for-testing",
   scopes: ["openid", "profile", "email"],
-  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
+  features: { pkce: true, "refresh-token": true, "client-credentials": false, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
 };
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), "oidc-experimental-test-"));
@@ -89,8 +89,9 @@ async function pushAuthorizationRequest(fetchWorker, issuer, overrides = {}) {
 async function completeLogin(fetchWorker, issuer, location) {
   const loginUrl = new URL(location, issuer);
   const csrfToken = (await (await fetchWorker(new Request(loginUrl))).text()).match(/name="csrf_token" value="([^"]+)"/)?.[1];
-  const login = await fetchWorker(new Request(`${issuer}/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ csrf_token: csrfToken, username: "alice", password: "password-123" }) }));
-  const consent = await fetchWorker(new Request(new URL(login.headers.get("location"), issuer), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ csrf_token: csrfToken, action: "approve" }) }));
+  const login = await fetchWorker(new Request(loginUrl, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ ...transactionFields(loginUrl), csrf_token: csrfToken, username: "alice", password: "password-123" }) }));
+  const consentUrl = new URL(login.headers.get("location"), issuer);
+  const consent = await fetchWorker(new Request(consentUrl, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ ...transactionFields(consentUrl), csrf_token: csrfToken, action: "approve" }) }));
   return new URL(consent.headers.get("location"));
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFile as execFileCallback } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { OP_ID_PATTERN, ROOT, readExperimentalCatalog, readExtensionCatalog, readOptionalCatalog, supportedFeatures } from "./lib.mjs";
 
 const execFile = promisify(execFileCallback);
-const FEATURES = ["pkce", "refresh-token", "introspection", "revocation", "request-object", "form-post-response-mode", "implicit-flow", "hybrid-flow"];
+const FEATURES = ["pkce", "refresh-token", "client-credentials", "introspection", "revocation", "request-object", "form-post-response-mode", "implicit-flow", "hybrid-flow"];
 
 /**
  * The scopes @maronn-openid-connect/core handles itself; anything else in config.scopes is
@@ -150,20 +150,14 @@ export const EXPERIMENTAL_WIRING = {
       // /device_authorization never goes through /authorize, so it has to enforce the
       // publisher's scope selection on its own — a client that asks for an unavailable
       // scope should learn about it at request time, same rationale as PAR above.
-      // The step function has no context, so the check goes right after it in the handler;
-      // the scope it returns has already had offline_access policy applied.
-      const devicePipeline = "features/device-authorization-grant/endpoints/device-authorization/pipeline.ts";
-      sources[devicePipeline] = replaceOnce(
-        sources[devicePipeline],
-        "import { Hono } from 'hono';\n",
-        "import { Hono } from 'hono';\nimport { DeviceAuthorizationError } from '@maronn-openid-connect/experimental/device-authorization-grant';\n",
-        "generated device-authorization pipeline.ts",
-      );
-      sources[devicePipeline] = replaceOnce(
-        sources[devicePipeline],
-        "    const scope = validateDeviceAuthorizationRequest(params, client);",
-        "    const scope = validateDeviceAuthorizationRequest(params, client);\n\n    // Enforce the scopes selected in the publisher UI.\n    const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n    const unsupportedScopes = scope.filter((value) => !allowedScopes.includes(value));\n    if (unsupportedScopes.length > 0) {\n      throw new DeviceAuthorizationError('invalid_scope', 'Unsupported scope: ' + unsupportedScopes.join(' '));\n    }",
-        "generated device-authorization pipeline.ts",
+      // Since cli 0.17 the step receives the context, so the check lives in the step itself,
+      // after the offline_access policy has been applied to the requested scope.
+      const deviceValidate = "features/device-authorization-grant/endpoints/device-authorization/steps/validate-request.ts";
+      sources[deviceValidate] = replaceOnce(
+        sources[deviceValidate],
+        "  const unsupportedScopes = findUnsupportedScopes(scope);\n",
+        "  // Enforce the scopes selected in the publisher UI.\n  const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n  const disallowedScopes = scope.filter((value) => !allowedScopes.includes(value));\n  if (disallowedScopes.length > 0) {\n    throw new DeviceAuthorizationError('invalid_scope', 'Unsupported scope: ' + disallowedScopes.join(' '));\n  }\n\n  const unsupportedScopes = findUnsupportedScopes(scope);\n",
+        "generated device-authorization validate-request.ts",
       );
     },
   },
@@ -232,37 +226,22 @@ export const EXPERIMENTAL_WIRING = {
   // CLI default); the per-OP maxRegisteredClients cap (100) bounds what one OP can store.
   "dynamic-client-registration": {
     apply(sources) {
-      sources["features/dynamic-client-registration/store.ts"] = replaceOnce(
-        sources["features/dynamic-client-registration/store.ts"],
-        "  Resolver extends { findClient(clientId: string): Promise<any> },\n>(base: Resolver): Resolver {",
-        "  Resolver extends { findClient(clientId: string): Promise<any> },\n>(base: Resolver, store: DynamicallyRegisteredClientStore = dynamicClientStore): Resolver {",
-        "generated dynamic-client-registration store.ts",
-      );
-      sources["features/dynamic-client-registration/store.ts"] = replaceOnce(
-        sources["features/dynamic-client-registration/store.ts"],
-        "      return (await dynamicClientStore.get(clientId)) ?? null;",
-        "      return (await store.get(clientId)) ?? null;",
-        "generated dynamic-client-registration store.ts",
-      );
+      const store = "features/dynamic-client-registration/store.ts";
       const feature = "features/dynamic-client-registration/feature.ts";
-      sources[feature] = replaceOnce(
-        sources[feature],
-        "  context: ({ c, options }) => ({\n    dynamicClientStore,",
-        "  context: ({ c, options }) => ({\n    dynamicClientStore: c.get('dynamicClientStore') ?? dynamicClientStore,",
-        "generated dynamic-client-registration feature.ts",
-      );
-      sources[feature] = replaceOnce(
-        sources[feature],
-        "withDynamicallyRegisteredClients(c.get('clientResolver'))",
-        "withDynamicallyRegisteredClients(c.get('clientResolver'), c.get('dynamicClientStore') ?? dynamicClientStore)",
-        "generated dynamic-client-registration feature.ts",
-      );
-      sources[feature] = replaceOnce(
-        sources[feature],
-        "withDynamicallyRegisteredClients(c.get('tokenClientResolver'))",
-        "withDynamicallyRegisteredClients(c.get('tokenClientResolver'), c.get('dynamicClientStore') ?? dynamicClientStore)",
-        "generated dynamic-client-registration feature.ts",
-      );
+      for (const [file, marker, replacement] of [
+        [store, ">(base: Resolver): Resolver {", ">(base: Resolver, store: DynamicallyRegisteredClientStore = dynamicClientStore): Resolver {"],
+        [store, "      const registration = await dynamicClientStore.get(clientId);\n      if (!registration) {", "      const registration = await store.get(clientId);\n      if (!registration) {"],
+        // cli 0.17: a registered client's keys (private_key_jwt, signed request objects) are
+        // resolved through a second wrapper, which reads the module-level store as well.
+        [store, "export function withDynamicallyRegisteredClientKeys(base: ClientKeyResolver): ClientKeyResolver {", "export function withDynamicallyRegisteredClientKeys(base: ClientKeyResolver, store: DynamicallyRegisteredClientStore = dynamicClientStore): ClientKeyResolver {"],
+        [store, "      const registration = await dynamicClientStore.get(clientId);\n      return { keys:", "      const registration = await store.get(clientId);\n      return { keys:"],
+        [feature, "  context: ({ c, options }) => ({\n    dynamicClientStore,", "  context: ({ c, options }) => ({\n    dynamicClientStore: c.get('dynamicClientStore') ?? dynamicClientStore,"],
+        [feature, "withDynamicallyRegisteredClients(c.get('clientResolver'))", "withDynamicallyRegisteredClients(c.get('clientResolver'), c.get('dynamicClientStore') ?? dynamicClientStore)"],
+        [feature, "withDynamicallyRegisteredClients(c.get('tokenClientResolver'))", "withDynamicallyRegisteredClients(c.get('tokenClientResolver'), c.get('dynamicClientStore') ?? dynamicClientStore)"],
+        [feature, "withDynamicallyRegisteredClientKeys(c.get('clientKeyResolver'))", "withDynamicallyRegisteredClientKeys(c.get('clientKeyResolver'), c.get('dynamicClientStore') ?? dynamicClientStore)"],
+      ]) {
+        sources[file] = replaceOnce(sources[file], marker, replacement, `generated ${file}`);
+      }
     },
   },
 };
@@ -355,6 +334,36 @@ function patchGeneratedSource(sources) {
     "  const advertised = discoveryOf(\n    features,\n    { ...metadata, code_challenge_methods_supported: ['S256'] },\n    issuer,\n    config,\n  );\n  return { ...advertised, scopes_supported: (c.get('allowedScopes') as string[] | undefined) ?? ['openid'] };",
     "generated discovery build-metadata.ts",
   );
+  // client_credentials (a standard feature since cli 0.17) never goes through /authorize, so
+  // it enforces the publisher's scope selection on its own. The CLI's findUnsupportedScopes()
+  // only knows what the OP declares (the six standard scopes plus --scope), which is wider
+  // than what the publisher selected. Absent when the publisher switched the feature off.
+  const clientCredentials = "features/client-credentials/steps/dispatch-client-credentials.ts";
+  if (sources[clientCredentials] !== undefined) {
+    sources[clientCredentials] = replaceOnce(
+      sources[clientCredentials],
+      "  const unsupportedScopes = findUnsupportedScopes(scope);\n",
+      "  // Enforce the scopes selected in the publisher UI.\n  const allowedScopes = (c.get('allowedScopes') as string[] | undefined) ?? ['openid'];\n  const disallowedScopes = scope.filter((value) => !allowedScopes.includes(value));\n  if (disallowedScopes.length > 0) {\n    throw new TokenError(TokenErrorCode.InvalidScope, 'Unsupported scope: ' + disallowedScopes.join(' '));\n  }\n\n  const unsupportedScopes = findUnsupportedScopes(scope);\n",
+      "generated client-credentials dispatch-client-credentials.ts",
+    );
+  }
+  // Since cli 0.17 the request-object feature also dereferences request_uri (OIDC Core 1.0
+  // §6.2): /authorize fetches the URL it is handed. The CLI's default accepts any https URL,
+  // which on a published OP would let anyone who knows the (public) client_id make the Worker
+  // request an address of their choosing. Fail safe, like token-exchange's allowedTargets:
+  // only a request_uri the client registered is fetched (OIDC Core 1.0 §6.2 / Registration
+  // 1.0 §2 `request_uris`). The portal's own client registers none, so for it only the inline
+  // `request` parameter works; a dynamically registered client can register its own.
+  const requestObject = "features/request-object/feature.ts";
+  if (sources[requestObject] !== undefined) {
+    sources[requestObject] = replaceOnce(
+      sources[requestObject],
+      "    requireRequestUriRegistration: false,",
+      "    requireRequestUriRegistration: true,",
+      "generated features/request-object/feature.ts",
+    );
+  }
+
   // The CLI's development accounts (testuser / otheruser) live in development.ts and reach a
   // provider only when something registers them explicitly; the generated app never does,
   // and accounts here come from the shared D1 only (test/generator.test.mjs checks the login).
@@ -394,6 +403,10 @@ export async function generateOp(opId, configPath) {
   const appDirectory = path.join(ROOT, "apps", opId);
   const sourceDirectory = path.join(appDirectory, "src");
   const providerDirectory = path.join(sourceDirectory, "oidc-provider");
+  // apps/<op_id>/ is this function's output and nothing else's. The CLI refuses to overwrite
+  // files without --force, and the patches below assert markers that a previous run already
+  // replaced, so a leftover directory (a re-run of `npm run check`, say) is cleared first.
+  await rm(appDirectory, { recursive: true, force: true });
   await mkdir(providerDirectory, { recursive: true });
 
   const rootPackage = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8"));
@@ -424,8 +437,10 @@ export async function generateOp(opId, configPath) {
   const patched = [
     "endpoints/authorize/steps/validate-request.ts",
     "endpoints/discovery/steps/build-metadata.ts",
+    ...(config.features["request-object"] ? ["features/request-object/feature.ts"] : []),
+    ...(config.features["client-credentials"] ? ["features/client-credentials/steps/dispatch-client-credentials.ts"] : []),
     ...(experimentalIds.includes("par") ? ["features/par/feature.ts", "features/par/config.ts", "features/par/endpoints/par/steps/validate-request.ts"] : []),
-    ...(experimentalIds.includes("device-authorization-grant") ? ["features/device-authorization-grant/feature.ts", "features/device-authorization-grant/endpoints/device-authorization/pipeline.ts"] : []),
+    ...(experimentalIds.includes("device-authorization-grant") ? ["features/device-authorization-grant/feature.ts", "features/device-authorization-grant/endpoints/device-authorization/steps/validate-request.ts"] : []),
     ...(experimentalIds.includes("ciba") ? ["features/ciba/feature.ts", "features/ciba/endpoints/backchannel-authentication/pipeline.ts"] : []),
     ...(experimentalIds.includes("dynamic-client-registration") ? ["features/dynamic-client-registration/feature.ts", "features/dynamic-client-registration/store.ts"] : []),
   ];

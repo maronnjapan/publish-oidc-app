@@ -19,7 +19,7 @@ import {
 } from "./lib.mjs";
 import { generateOp } from "./generate-op.mjs";
 
-const FEATURES = ["pkce", "refresh-token", "introspection", "revocation", "request-object", "form-post-response-mode", "implicit-flow", "hybrid-flow"];
+const FEATURES = ["pkce", "refresh-token", "client-credentials", "introspection", "revocation", "request-object", "form-post-response-mode", "implicit-flow", "hybrid-flow"];
 
 function parseRequestConfig(row, opId) {
   if (!row || row.op_id !== opId || typeof row.config_json !== "string") throw new Error("deployment request/config was not found");
@@ -46,11 +46,16 @@ export const CIBA_GRANT_TYPE = "urn:openid:params:grant-type:ciba";
  * experimental grant has to be registered alongside the standard ones or every exchange
  * comes back unauthorized_client. id-jag reuses the token-exchange grant for issuance (a
  * dedicated requested_token_type on the same URN) and adds jwt-bearer for redemption, so a
- * Set dedupes it against a separately-selected token-exchange feature.
+ * Set dedupes it against a separately-selected token-exchange feature. The same goes for the
+ * standard client-credentials feature (cli 0.17): it is a grant of its own.
  */
-export function clientGrantTypes(features, experimental = {}) {
+export function clientGrantTypes(features, experimental = {}, clientType = "confidential") {
   const grantTypes = new Set(["authorization_code"]);
   if (features["refresh-token"]) grantTypes.add("refresh_token");
+  // RFC 6749 §4.4: the grant authenticates the client itself, so the generated OP refuses it
+  // for a public client whatever is registered; registering it only where it can work keeps
+  // the client's metadata honest.
+  if (features["client-credentials"] && clientType === "confidential") grantTypes.add("client_credentials");
   if (experimental["token-exchange"]) grantTypes.add(TOKEN_EXCHANGE_GRANT_TYPE);
   if (experimental["device-authorization-grant"]) grantTypes.add(DEVICE_CODE_GRANT_TYPE);
   if (experimental["ciba"]) grantTypes.add(CIBA_GRANT_TYPE);
@@ -86,7 +91,11 @@ export async function deployOp(opId) {
     redirectUris: [config.redirect_url],
     clientType: config.client_type,
     offlineAccessAllowed: config.scopes.includes("offline_access"),
-    grantTypes: clientGrantTypes(config.features, generated.experimental),
+    // The client's registered scope (RFC 7591 §2) is the publisher's selection. /authorize
+    // treats a client without one as unrestricted, but client_credentials grants only what
+    // is registered, so without this the grant could never carry a scope.
+    scope: config.scopes,
+    grantTypes: clientGrantTypes(config.features, generated.experimental, config.client_type),
     tokenEndpointAuthMethods: config.client_type === "public" ? ["none"] : ["client_secret_post"],
   };
   await uploadWorker(infra, token, opId, code, [

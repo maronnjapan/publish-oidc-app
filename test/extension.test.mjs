@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { EXTENSION_WIRING, generateOp, parseExtensionSelection } from "../scripts/generate-op.mjs";
 import { bundle, readExtensionCatalog, supportedFeatures } from "../scripts/lib.mjs";
-import { withCookieJar } from "./support/cookie-jar.mjs";
+import { transactionFields, withCookieJar } from "./support/cookie-jar.mjs";
 import { MemoryD1, base64Url, signingEnvironment } from "./support/d1-mock.mjs";
 
 const execFile = promisify(execFileCallback);
@@ -21,7 +21,7 @@ const config = {
   client_id: "client_ext123456789",
   client_secret: "extension-secret-long-enough-for-testing",
   scopes: ["openid", "profile", "email"],
-  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
+  features: { pkce: true, "refresh-token": true, "client-credentials": false, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
 };
 
 const GOOGLE_CLIENT_ID = "1234567890-testclient.apps.googleusercontent.com";
@@ -161,7 +161,7 @@ test("a verified Google account signs in, is provisioned in D1, and completes th
   assert.ok(sessionCookie.includes("="), "the OP session cookie must be set");
 
   const consentCsrf = csrfFrom(await (await flow.fetchWorker(new Request(consentUrl, { headers: { Cookie: sessionCookie } }))).text());
-  const consent = await flow.fetchWorker(new Request(`${google.issuer}/consent`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", Cookie: sessionCookie }, body: new URLSearchParams({ csrf_token: consentCsrf, action: "approve" }) }));
+  const consent = await flow.fetchWorker(new Request(consentUrl, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", Cookie: sessionCookie }, body: new URLSearchParams({ ...transactionFields(consentUrl), csrf_token: consentCsrf, action: "approve" }) }));
   const callback = new URL(consent.headers.get("location"));
   const code = callback.searchParams.get("code");
   assert.ok(code, `no authorization code in ${callback}`);

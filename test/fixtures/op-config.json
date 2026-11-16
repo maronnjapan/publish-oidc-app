@@ -9,6 +9,7 @@
   "features": {
     "pkce": true,
     "refresh-token": false,
+    "client-credentials": false,
     "introspection": false,
     "revocation": true,
     "request-object": false,

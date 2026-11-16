@@ -20,7 +20,7 @@ await writeFile(configPath, JSON.stringify({
   client_type: "public",
   client_id: "client_store12345678",
   scopes: ["openid"],
-  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
+  features: { pkce: true, "refresh-token": true, "client-credentials": false, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
   experimental: { par: {} },
 }));
 const generated = await generateOp(opId, configPath);
@@ -172,4 +172,10 @@ test("dynamic client registrations are scoped to their OP, never expire, and are
   assert.equal(await store.count(), 1);
   assert.equal([...DB.records.keys()].some((key) => key.includes("dcr-abc")), false, "the client id must not be stored in the clear as a key");
   assert.equal([...DB.records.values()].every((row) => row.expires_at === null), true);
+  // cli 0.17: the register endpoint undoes a save that turned out to exceed the cap.
+  await other.delete("dcr-abc");
+  assert.equal(await store.count(), 1, "another OP must not be able to delete this OP's registration");
+  await store.delete("dcr-abc");
+  assert.equal(await store.get("dcr-abc"), undefined);
+  assert.equal(await store.count(), 0);
 });

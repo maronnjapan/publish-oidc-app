@@ -105,6 +105,7 @@ CLI（`@maronn-openid-connect/cli`）がこれらの機能を自前で生成し�
 - 登録は**認証なし（open registration）**です。生成コードの `initialAccessToken` は未設定のままで、ポータルからは指定できません。代わりに1つのOPあたり `maxRegisteredClients`（既定100件）で打ち止めになり、超えると429を返します。
 - 登録済みクライアントは共有D1の `oidc_records`（`kind = dynamic-client:`、期限なし）に保存します（`templates/cloudflare/persistence.ts` の `createD1DynamicClientStore`）。生成コードの既定はインメモリで、Workersではisolateごとに消えてしまうため、`templates/cloudflare/index.ts` が毎リクエスト差し込むD1版を使います。Reaperの `op_id` 単位の削除にそのまま乗ります。
 - 生成される `withDynamicallyRegisteredClients()` は既定でモジュール内のストアを読むため、`EXPERIMENTAL_WIRING['dynamic-client-registration']` が `apply.ts` / `store.ts` を書き換えてリクエストごとのストアを渡します。このパッチが欠けると、登録は成功するのに次のリクエストで `client_id` が解決できなくなります（`test/experimental.test.mjs` が検査します）。
+- cli 0.17から、登録時に `jwks` / `jwks_uri`（`private_key_jwt` や署名付きRequest Object用）と `request_uris` を受け付けます。`jwks_uri` と `request_uris` はOPが取得しに行くURLで、CLIがhttpsの公開ホストに限定します。登録上限を超えた保存の取り消しにストアの `delete()` を使うため、`createD1DynamicClientStore` も `delete()` を実装しています。
 - RFC 7592（登録の更新・削除）は実装されていません。
 
 選択内容は生成時に `src/index.ts` の `EXPERIMENTAL_FEATURES` へ直接埋め込みます。Worker変数として渡すと、あとから消えたり書き換わったりしたときに「PAR必須」のような設定が黙って緩む（fail open）ためです。
@@ -118,10 +119,17 @@ CLIの出力にこのリポジトリが当てる変更は次だけです。い�
 | `endpoints/authorize/steps/validate-request.ts` | 作成画面で選んだスコープ以外を `invalid_scope` で拒否（CLI自身の `AuthorizationError` を投げるので、jarm有効時は署名付きJWTのエラー応答にCLIが変換します） |
 | `endpoints/discovery/steps/build-metadata.ts` | `scopes_supported` を選択スコープに差し替え（refresh-token機能が勝手に足す `offline_access` も、選んでいなければ載せません） |
 | `features/par/endpoints/par/steps/validate-request.ts` / `features/par/config.ts` | 同じスコープ検証をpush時にも適用 / 必須モードの反映 |
-| `features/device-authorization-grant/endpoints/device-authorization/pipeline.ts` | 同じスコープ検証を `/device_authorization` にも適用 |
+| `features/device-authorization-grant/endpoints/device-authorization/steps/validate-request.ts` | 同じスコープ検証を `/device_authorization` にも適用（cli 0.17からステップ関数が `c` を受け取るので、ステップ内で検証します） |
 | `features/ciba/endpoints/backchannel-authentication/pipeline.ts` | 同じスコープ検証を `/backchannel_authentication` にも適用 |
 | `features/{par,device-authorization-grant,ciba,dynamic-client-registration}/feature.ts` | featureの `context` フックがin-memoryストアで上書きしないよう、先に積まれたD1版（`c.get(...)`）を優先させる |
-| `features/dynamic-client-registration/store.ts` | `withDynamicallyRegisteredClients()` がリクエストごとのD1ストアを読めるようにする |
+| `features/dynamic-client-registration/store.ts` | `withDynamicallyRegisteredClients()` と `withDynamicallyRegisteredClientKeys()`（cli 0.17で追加。登録済みクライアントの公開鍵を引く）がリクエストごとのD1ストアを読めるようにする |
+| `features/client-credentials/steps/dispatch-client-credentials.ts` | 標準機能 `client-credentials` を選んだときだけ。同じスコープ検証を `grant_type=client_credentials` にも適用 |
+| `features/request-object/feature.ts` | 標準機能 `request-object` を選んだときだけ。`requireRequestUriRegistration` を `true` にする（下記） |
+
+### 標準機能に当てるパッチ（cli 0.17）
+
+- **`client-credentials`**（cli 0.17で標準機能に追加、既定で有効）: `/authorize` を通らないグラントなので、公開スコープの強制は専用のパッチで行います。このグラントはクライアントに**登録されたスコープ**だけを付与するため、`scripts/deploy-op.mjs` はクライアントの `scope` に作成画面で選んだスコープを登録し、confidentialクライアントに限って `grantTypes` へ `client_credentials` を加えます（publicクライアントはCLIが `unauthorized_client` で拒否します）。`openid` と `offline_access` はこのグラントでは要求できず、ID TokenとRefresh Tokenは発行されません。
+- **`request-object`**: cli 0.17から `request_uri`（OIDC Core 1.0 §6.2）も解決するようになり、`/authorize` が渡されたURLを取得します。CLIの既定は「登録なしで任意のhttps URLを取得」ですが、公開されたOPでは `client_id` を知っている誰でもWorkerに任意のURLへリクエストさせられることになるため、`require_request_uri_registration=true` に固定しています（fail safe）。ポータルが登録するクライアントは `request_uris` を持たないので、使えるのはインラインの `request` パラメータだけです。`dynamic-client-registration` で登録したクライアントは自分の `request_uris` を登録できます。PARの `request_uri`（`urn:ietf:params:oauth:request_uri:`）はこの制限の対象外です。`test/optional.test.mjs` が、未登録の `request_uri` で外向きのfetchが起きないことを検査します。
 
 CLIの開発用アカウント（`testuser` / `otheruser`）は `development.ts` にあり、`registerDevelopmentUsers()` を呼んだときだけ登録されます。生成コードは呼ばないので、パッチは不要です（`test/static-audit.test.mjs` と `test/persistence.test.mjs` が検査します）。
 

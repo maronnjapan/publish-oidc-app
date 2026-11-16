@@ -103,6 +103,15 @@
           ]
         },
         {
+          "id": "client-credentials",
+          "label": "Client Credentials",
+          "default": true,
+          "summary": "ユーザーを介さず、クライアント自身の認証だけでアクセストークンを受け取る grant_type=client_credentials を有効にします。Confidentialクライアント専用で、ID Tokenは発行されません。",
+          "links": [
+            { "label": "RFC 6749 §4.4", "url": "https://datatracker.ietf.org/doc/html/rfc6749#section-4.4" }
+          ]
+        },
+        {
           "id": "introspection",
           "label": "Introspection",
           "default": true,

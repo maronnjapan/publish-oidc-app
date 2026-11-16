@@ -16,7 +16,7 @@ OpenID ConnectやOAuthまわりで調べたことはブログに書いていま�
 ## 主な機能
 
 - Worker 1個につきOP 1個を発行し、Workerのサブドメインラベル（例: `maronn-op-abc...`）をOP IDと共有D1の名前空間キーに使用
-- 作成画面でリダイレクトURL、`openid`に加えるスコープ、標準の6スコープ以外の任意のカスタムスコープ（`--scope`、[docs/custom-scopes.md](docs/custom-scopes.md)）、`public`/`confidential`、PKCE・Refresh Token・Introspection・Revocation・Request Objectを選択
+- 作成画面でリダイレクトURL、`openid`に加えるスコープ、標準の6スコープ以外の任意のカスタムスコープ（`--scope`、[docs/custom-scopes.md](docs/custom-scopes.md)）、`public`/`confidential`、PKCE・Refresh Token・Client Credentials・Introspection・Revocation・Request Object・Form Post Response Mode・Implicit Flow・Hybrid Flowを選択
 - `@maronn-openid-connect/experimental`の試験的な機能（PAR / RFC 9126、Token Exchange / RFC 8693、JARM、Device Authorization Grant / RFC 8628、ID-JAG / Cross-App Access、CIBA / CIBA Core 1.0、JWT Introspection Response / RFC 9701）を機能単位で選択（安定していない旨を作成画面と作成完了画面に明示）
 - CLI本体のオプション機能（既定で無効な安定機能。認可トランザクションのブラウザ束縛）を機能単位で選択（既定では折りたたみ表示）
 - CLIの拡張機能（既定で無効な安定機能。Googleでログイン）を機能単位で選択（既定では折りたたみ表示。GoogleのOAuthクライアントIDの入力が必要）

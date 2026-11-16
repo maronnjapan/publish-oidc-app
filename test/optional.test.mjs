@@ -21,7 +21,7 @@ const config = {
   client_id: "client_opt123456789",
   client_secret: "optional-secret-long-enough-for-testing",
   scopes: ["openid", "profile", "email"],
-  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
+  features: { pkce: true, "refresh-token": true, "client-credentials": false, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
 };
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), "oidc-optional-test-"));
@@ -121,8 +121,10 @@ test("the transaction binding that used to be optional is now the default flow",
   const flow = await startFlow(fetchWorker, unbound.issuer, "plain");
 
   assert.equal(flow.response.status, 302);
-  // cli 0.11.0 made the cookie binding standard: the transaction id never appears in the URL.
-  assert.equal(flow.loginUrl.searchParams.get("transaction_id"), null);
+  // cli 0.11.0 made the cookie binding standard. cli 0.17.0 puts the transaction id back in
+  // the URL as well (so two tabs can tell their transactions apart), but the id alone opens
+  // nothing: the checks below still need the HttpOnly cookie.
+  assert.ok(flow.loginUrl.searchParams.get("transaction_id"));
   assert.match(flow.response.headers.get("set-cookie") ?? "", /^__Host-oidc_txn=[^;]+; HttpOnly; Secure; SameSite=Lax/);
   assert.deepEqual(JSON.parse(await readFile(path.join(unbound.generated.appDirectory, "op.json"), "utf8")).optional, {});
 
@@ -153,4 +155,26 @@ test("a scope the publisher did not select is refused at /authorize with a redir
   assert.equal(`${location.origin}${location.pathname}`, config.redirect_url);
   assert.equal(location.searchParams.get("error"), "invalid_scope");
   assert.equal(location.searchParams.get("state"), "scope-state");
+});
+
+test("an unregistered request_uri is refused without the OP fetching it", async () => {
+  // cli 0.17 dereferences request_uri (OIDC Core 1.0 §6.2). The generator turns on
+  // require_request_uri_registration, and the portal's client registers none, so a URL the
+  // caller picked must never be requested by the published Worker.
+  const { fetch: fetchWorker } = await unbound.client();
+  const discovery = await (await fetchWorker(new Request(`${unbound.issuer}/.well-known/openid-configuration`))).json();
+  assert.equal(discovery.require_request_uri_registration, true);
+
+  const authorizeUrl = new URL(`${unbound.issuer}/authorize`);
+  for (const [name, value] of Object.entries({ response_type: "code", client_id: config.client_id, redirect_uri: config.redirect_url, scope: "openid", state: "ruri", request_uri: "https://attacker.example/request.jwt" })) authorizeUrl.searchParams.set(name, value);
+  const realFetch = globalThis.fetch;
+  const outbound = [];
+  globalThis.fetch = async (input) => { outbound.push(String(input?.url ?? input)); throw new Error("outbound fetch is not expected"); };
+  let response;
+  try { response = await fetchWorker(new Request(authorizeUrl)); } finally { globalThis.fetch = realFetch; }
+  assert.deepEqual(outbound, []);
+  assert.ok(response.status === 400 || response.status === 302, `unexpected status ${response.status}`);
+  const body = response.status === 302 ? new URL(response.headers.get("location")).searchParams.get("error") : await response.text();
+  assert.match(body, /invalid_request_uri|request_uri/i);
+  assert.equal(response.status === 302 && new URL(response.headers.get("location")).searchParams.has("code"), false);
 });

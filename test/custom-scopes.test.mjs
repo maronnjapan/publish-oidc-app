@@ -7,7 +7,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { generateOp } from "../scripts/generate-op.mjs";
 import { bundle } from "../scripts/lib.mjs";
-import { withCookieJar } from "./support/cookie-jar.mjs";
+import { transactionFields, withCookieJar } from "./support/cookie-jar.mjs";
 import { MemoryD1, base64Url, signingEnvironment } from "./support/d1-mock.mjs";
 
 /**
@@ -26,7 +26,7 @@ const config = {
   client_id: "client_scope123456789",
   client_secret: "custom-scope-secret-long-enough-for-testing",
   scopes: ["openid", "reports.read", "reports.write"],
-  features: { pkce: true, "refresh-token": false, introspection: false, revocation: false, "request-object": false, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
+  features: { pkce: true, "refresh-token": false, "client-credentials": false, introspection: false, revocation: false, "request-object": false, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
 };
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), "oidc-custom-scope-test-"));
@@ -101,10 +101,10 @@ test("a declared custom scope completes the authorization-code flow and is grant
   const csrfToken = (await loginPage.text()).match(/name="csrf_token" value="([^"]+)"/)?.[1];
   assert.ok(csrfToken);
 
-  const login = await fetchWorker(new Request(`${issuer}/login`, {
+  const login = await fetchWorker(new Request(loginUrl, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ csrf_token: csrfToken, username: "alice", password: "password-123" }),
+    body: new URLSearchParams({ ...transactionFields(loginUrl), csrf_token: csrfToken, username: "alice", password: "password-123" }),
   }));
   assert.equal(login.status, 302, await login.clone().text());
 
@@ -118,7 +118,7 @@ test("a declared custom scope completes the authorization-code flow and is grant
   const consent = await fetchWorker(new Request(consentUrl, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ csrf_token: csrfToken, action: "approve" }),
+    body: new URLSearchParams({ ...transactionFields(consentUrl), csrf_token: csrfToken, action: "approve" }),
   }));
   assert.equal(consent.status, 302, await consent.clone().text());
   const code = new URL(consent.headers.get("location")).searchParams.get("code");

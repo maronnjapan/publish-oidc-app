@@ -138,7 +138,8 @@ export async function signingEnvironment(issuer, opId, config, DB, experimental 
       redirectUris: [config.redirect_url],
       clientType: config.client_type,
       offlineAccessAllowed: config.scopes.includes("offline_access"),
-      grantTypes: clientGrantTypes(config.features, experimental),
+      scope: config.scopes,
+      grantTypes: clientGrantTypes(config.features, experimental, config.client_type),
       tokenEndpointAuthMethods: config.client_type === "public" ? ["none"] : ["client_secret_post"],
     }),
   };

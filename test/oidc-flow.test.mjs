@@ -7,7 +7,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { generateOp } from "../scripts/generate-op.mjs";
 import { bundle } from "../scripts/lib.mjs";
-import { withCookieJar } from "./support/cookie-jar.mjs";
+import { transactionFields, withCookieJar } from "./support/cookie-jar.mjs";
 import { MemoryD1, base64Url, signingEnvironment } from "./support/d1-mock.mjs";
 
 const opId = "maronn-op-flow123456";
@@ -20,7 +20,7 @@ const config = {
   client_id: "client_flow123456789",
   client_secret: "flow-secret-that-is-long-enough-for-testing",
   scopes: ["openid", "profile", "email"],
-  features: { pkce: true, "refresh-token": true, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
+  features: { pkce: true, "refresh-token": true, "client-credentials": false, introspection: true, revocation: true, "request-object": true, "form-post-response-mode": false, "implicit-flow": false, "hybrid-flow": false },
 };
 
 const temporary = await mkdtemp(path.join(os.tmpdir(), "oidc-flow-test-"));
@@ -44,10 +44,11 @@ async function startSession() {
   for (const [name, value] of Object.entries({ response_type: "code", client_id: config.client_id, redirect_uri: config.redirect_url, scope: "openid profile email", state: "flow-state", nonce: "flow-nonce", code_challenge: challenge, code_challenge_method: "S256" })) authorizeUrl.searchParams.set(name, value);
   const authorize = await fetchWorker(new Request(authorizeUrl));
   assert.equal(authorize.status, 302, await authorize.clone().text());
-  const loginPage = await fetchWorker(new Request(new URL(authorize.headers.get("location"), issuer)));
+  const loginUrl = new URL(authorize.headers.get("location"), issuer);
+  const loginPage = await fetchWorker(new Request(loginUrl));
   const csrfToken = (await loginPage.text()).match(/name="csrf_token" value="([^"]+)"/)?.[1];
   assert.ok(csrfToken);
-  const login = (username, password) => fetchWorker(new Request(`${issuer}/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ csrf_token: csrfToken, username, password }) }));
+  const login = (username, password) => fetchWorker(new Request(loginUrl, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ ...transactionFields(loginUrl), csrf_token: csrfToken, username, password }) }));
   return { DB, fetchWorker, csrfToken, verifier, login };
 }
 
@@ -58,8 +59,9 @@ test("generated OP completes authorization-code login through shared D1", async 
   assert.equal(loggedIn.status, 302, await loggedIn.clone().text());
   assert.match(loggedIn.headers.get("set-cookie"), /session_id=/);
 
-  const consentBody = new URLSearchParams({ csrf_token: csrfToken, action: "approve" });
-  const consent = await fetchWorker(new Request(new URL(loggedIn.headers.get("location"), issuer), { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: consentBody }));
+  const consentUrl = new URL(loggedIn.headers.get("location"), issuer);
+  const consentBody = new URLSearchParams({ ...transactionFields(consentUrl), csrf_token: csrfToken, action: "approve" });
+  const consent = await fetchWorker(new Request(consentUrl, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: consentBody }));
   assert.equal(consent.status, 302, await consent.clone().text());
   const callback = new URL(consent.headers.get("location"));
   assert.equal(callback.origin + callback.pathname, config.redirect_url);
