@@ -28,6 +28,7 @@ function deploymentConfig(input: CreateAppInput, creation: Creation) {
     features: input.features,
     optional: input.optional,
     experimental: input.experimental,
+    extension: input.extension,
   };
 }
 

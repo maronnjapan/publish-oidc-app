@@ -34,6 +34,11 @@ export function ResultPanel({
           : "publicクライアントのためシークレットは発行されません。"}
       </p>
       {enabled.optional.length > 0 ? <p>オプション機能を有効にしています（{enabled.optional.join(" / ")}）。</p> : null}
+      {enabled.extension.map((entry) => (
+        <p key={entry.label}>
+          <strong>{entry.label}:</strong> {entry.afterCreate.replaceAll("{op_url}", url)}
+        </p>
+      ))}
       {enabled.experimental.length > 0 ? (
         <p class="warning">
           試験的な機能を有効にしています（
