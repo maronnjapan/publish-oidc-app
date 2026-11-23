@@ -9,8 +9,8 @@
   "config": {
     "maronnOidcCli": "@maronn-openid-connect/cli@0.17.0",
     "maronnOidcCore": "@maronn-openid-connect/core@0.12.0",
-    "maronnOidcExperimental": "@maronn-openid-connect/experimental@0.0.18",
-    "maronnOidcGoogleLogin": "@maronn-openid-connect/google-login@0.0.12"
+    "maronnOidcExperimental": "@maronn-openid-connect/experimental@0.0.19",
+    "maronnOidcGoogleLogin": "@maronn-openid-connect/google-login@0.0.13"
   },
   "scripts": {
     "build": "npm run build:portal",
@@ -27,8 +27,8 @@
   },
   "dependencies": {
     "@maronn-openid-connect/core": "0.12.0",
-    "@maronn-openid-connect/experimental": "0.0.18",
-    "@maronn-openid-connect/google-login": "0.0.12",
+    "@maronn-openid-connect/experimental": "0.0.19",
+    "@maronn-openid-connect/google-login": "0.0.13",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.9.2",
     "preact": "^10.29.8",
