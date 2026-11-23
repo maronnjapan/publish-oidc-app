@@ -9,8 +9,11 @@
 | クライアント種別・スコープ・OP機能（標準機能） | `portal-choices.json` | このリポジトリ |
 | オプション機能（CLI本体・デフォルト無効） | `optional-features.json` | CLIの `--help`（[docs/optional-features.md](optional-features.md)） |
 | 試験的な機能 | `experimental-features.json` | packageの `exports`（[docs/experimental.md](experimental.md)） |
+| 拡張機能（CLI・別package・デフォルト無効） | `extension-features.json` | CLIの `--help`（[docs/extension-features.md](extension-features.md)） |
 
-3つとも「説明文（`summary`）＋任意のリンク（`links`）」という同じ形を持ちます。opt-inの2つは機能の追加自体が追従作業の産物なので、説明とリンクはその配線手順（各ドキュメントの手順5）の一部として埋めます。
+4つとも「説明文（`summary`）＋任意のリンク（`links`）」という同じ形を持ちます。opt-inの3つは機能の追加自体が追従作業の産物なので、説明とリンクはその配線手順（各ドキュメントの手順5）の一部として埋めます。
+
+カスタムスコープ（[docs/custom-scopes.md](custom-scopes.md)）だけはこの4つに入りません。選べる値がアプリごとの自由文字列でカタログ化できないため、作成画面の自由入力フィールド自体に説明を書いています（`system/portal/src/ui/App.tsx`）。
 
 ## `portal-choices.json`
 
@@ -69,4 +72,4 @@
 2. `npm run check` を通す。`test/choices.test.mjs` が、説明が画面に出ていること・リンクが解決すること・IDがコード側の配列（ポータルの `FEATURE_NAMES` / `OPTIONAL_SCOPES`、`scripts/generate-op.mjs` の `FEATURES`、`scripts/check-package-updates.mjs` の `KNOWN_CLI_FEATURES`）と一致していることを検査します。
 3. ポータルを再デプロイする（`npm run deploy:portal`）。カタログはWorkerへバンドルされるので、再デプロイするまで画面は変わりません。
 
-新しい選択項目そのものを増やす場合は、説明を書く前に配線を済ませてください。opt-in機能なら [docs/optional-features.md](optional-features.md) / [docs/experimental.md](experimental.md) の手順、標準機能なら `FEATURE_NAMES`・`FEATURES`・`KNOWN_CLI_FEATURES` の3箇所です。IDが揃っていないと `test/choices.test.mjs` が落ちます。
+新しい選択項目そのものを増やす場合は、説明を書く前に配線を済ませてください。opt-in機能なら [docs/optional-features.md](optional-features.md) / [docs/experimental.md](experimental.md) / [docs/extension-features.md](extension-features.md) の手順、標準機能なら `FEATURE_NAMES`・`FEATURES`・`KNOWN_CLI_FEATURES` の3箇所です。IDが揃っていないと `test/choices.test.mjs` が落ちます。
